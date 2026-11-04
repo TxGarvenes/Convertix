@@ -5,6 +5,8 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <future>
+#include <optional>
 #include <raylib.h>
 #include <string>
 #include <vector>
@@ -19,7 +21,7 @@ enum class AppState {
 class App {
 public:
     App();
-    ~App() = default;
+    ~App();
 
     void run();
 
@@ -38,12 +40,17 @@ private:
     Converter m_converter;
     bool m_magickAvailable{false};
 
+    std::future<std::optional<std::filesystem::path>> m_fileDialogTask;
+    bool m_fileDialogOpen{false};
+
     Font m_font{};
     bool m_customFontLoaded{false};
 
     void loadAppFont();
     void unloadAppFont();
 
+    void selectFile(const std::filesystem::path& filePath);
+    void openFileDialogAsync();
     void handleDroppedFiles();
     void update();
     void render();

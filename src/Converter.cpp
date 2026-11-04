@@ -43,9 +43,14 @@ void Converter::startConversion(const std::filesystem::path& input, FileType tar
 
     m_status.store(ConversionStatus::IN_PROGRESS);
 
-    m_task = std::async(std::launch::async, [this, input, outputPath]() {
+    m_task = std::async(std::launch::async, [this, input, outputPath, ext]() {
+        std::string options;
+        if (ext == ".jpg" || ext == ".jpeg") {
+            options = " -background white -alpha remove -alpha off";
+        }
+
         const std::string command =
-            "magick \"" + input.string() + "\" \"" + outputPath.string() + "\"";
+            "magick \"" + input.string() + "\"" + options + " \"" + outputPath.string() + "\"";
         const int result = std::system(command.c_str());
 
         std::error_code ec;

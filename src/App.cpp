@@ -2,7 +2,8 @@
 #include "FormatMatrix.hpp"
 
 #include <array>
-#include <optional>
+#include <chrono>
+#include <cstdio>
 
 namespace {
 
@@ -44,10 +45,66 @@ std::optional<std::filesystem::path> findFirstTtfInDir(const std::filesystem::pa
     return std::nullopt;
 }
 
+std::optional<std::filesystem::path> openNativeFileDialog() {
+#ifdef _WIN32
+    const char* cmd =
+        "powershell -NoProfile -Command \""
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "$f = New-Object System.Windows.Forms.OpenFileDialog; "
+        "$f.Title = 'Selectionner une image'; "
+        "$f.Filter = 'Images (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif|Tous les fichiers (*.*)|*.*'; "
+        "if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }\"";
+    FILE* pipe = _popen(cmd, "r");
+#else
+    const char* cmd =
+        "if command -v zenity >/dev/null 2>&1; then "
+        "zenity --file-selection --title=\"Sélectionner une image\" "
+        "--file-filter=\"Images | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF\" "
+        "--file-filter=\"Tous les fichiers | *\" 2>/dev/null; "
+        "elif command -v kdialog >/dev/null 2>&1; then "
+        "kdialog --getopenfilename . \"*.png *.jpg *.jpeg *.webp *.bmp *.gif|Images\" 2>/dev/null; "
+        "elif command -v yad >/dev/null 2>&1; then "
+        "yad --file --title=\"Sélectionner une image\" 2>/dev/null; "
+        "fi";
+    FILE* pipe = popen(cmd, "r");
+#endif
+    if (!pipe) {
+        return std::nullopt;
+    }
+
+    std::string output;
+    std::array<char, 512> buffer{};
+    while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+        output += buffer.data();
+    }
+
+#ifdef _WIN32
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+
+    while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) {
+        output.pop_back();
+    }
+
+    if (output.empty()) {
+        return std::nullopt;
+    }
+
+    return std::filesystem::path(output);
+}
+
 } // namespace
 
 App::App()
     : m_magickAvailable(m_converter.isMagickAvailable()) {}
+
+App::~App() {
+    if (m_fileDialogTask.valid()) {
+        m_fileDialogTask.wait();
+    }
+}
 
 void App::loadAppFont() {
     const std::array<std::filesystem::path, 4> searchDirs = {
@@ -66,7 +123,6 @@ void App::loadAppFont() {
     }
 
     if (fontPath.has_value()) {
-        // Charge les caractères ASCII et Latin-1 (accents français inclus)
         std::vector<int> codepoints;
         codepoints.reserve(224);
         for (int cp = 32; cp <= 255; ++cp) {
@@ -116,6 +172,31 @@ void App::run() {
     CloseWindow();
 }
 
+void App::selectFile(const std::filesystem::path& filePath) {
+    m_converter.reset();
+    m_currentFile = filePath;
+    m_detectedType = FileDetector::detect(m_currentFile);
+    m_availableTargets = FormatMatrix::getAvailableTargets(m_detectedType);
+    m_selectedTargetIndex = 0;
+    m_dropdownOpen = false;
+    m_state = AppState::FILE_DETECTED;
+}
+
+void App::openFileDialogAsync() {
+    if (m_fileDialogOpen || m_state == AppState::CONVERTING) {
+        return;
+    }
+
+    if (m_fileDialogTask.valid()) {
+        m_fileDialogTask.wait();
+    }
+
+    m_fileDialogOpen = true;
+    m_fileDialogTask = std::async(std::launch::async, []() {
+        return openNativeFileDialog();
+    });
+}
+
 void App::handleDroppedFiles() {
     if (!IsFileDropped()) {
         return;
@@ -123,19 +204,23 @@ void App::handleDroppedFiles() {
 
     FilePathList droppedFiles = LoadDroppedFiles();
     if (droppedFiles.count > 0 && m_state != AppState::CONVERTING) {
-        m_converter.reset();
-        m_currentFile = std::filesystem::path(droppedFiles.paths[0]);
-        m_detectedType = FileDetector::detect(m_currentFile);
-        m_availableTargets = FormatMatrix::getAvailableTargets(m_detectedType);
-        m_selectedTargetIndex = 0;
-        m_dropdownOpen = false;
-        m_state = AppState::FILE_DETECTED;
+        selectFile(std::filesystem::path(droppedFiles.paths[0]));
     }
     UnloadDroppedFiles(droppedFiles);
 }
 
 void App::update() {
     handleDroppedFiles();
+
+    if (m_fileDialogOpen && m_fileDialogTask.valid()) {
+        if (m_fileDialogTask.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            const auto selectedPath = m_fileDialogTask.get();
+            m_fileDialogOpen = false;
+            if (selectedPath.has_value() && m_state != AppState::CONVERTING) {
+                selectFile(*selectedPath);
+            }
+        }
+    }
 
     if (m_state == AppState::CONVERTING) {
         const ConversionStatus status = m_converter.getStatus();
@@ -217,8 +302,16 @@ void App::render() {
 
     switch (m_state) {
         case AppState::WAITING_DROP: {
-            drawCenteredText("Glissez et déposez une image ici", 195.0f, 22.0f, {51, 65, 85, 255});
-            drawCenteredText("Formats supportés : PNG, JPEG, WEBP, BMP, GIF", 232.0f, 16.0f, {100, 116, 139, 255});
+            drawCenteredText("Glissez et déposez une image ici", 150.0f, 22.0f, {51, 65, 85, 255});
+            drawCenteredText("Formats supportés : PNG, JPEG, WEBP, BMP, GIF", 185.0f, 16.0f, {100, 116, 139, 255});
+            drawCenteredText("— ou —", 220.0f, 16.0f, {148, 163, 184, 255});
+
+            const Rectangle importBtn{210.0f, 255.0f, 180.0f, 44.0f};
+            const std::string importLabel = m_fileDialogOpen ? "Ouverture..." : "Importer";
+            const Color baseCol = m_fileDialogOpen ? Color{148, 163, 184, 255} : Color{37, 99, 235, 255};
+            if (drawButton(importBtn, importLabel, baseCol, {29, 78, 216, 255}, RAYWHITE, !m_fileDialogOpen)) {
+                openFileDialogAsync();
+            }
             break;
         }
 
@@ -240,12 +333,10 @@ void App::render() {
                 drawCenteredText(detectedStr, 142.0f, 18.0f, {22, 163, 74, 255});
                 drawCenteredText("Sélectionnez le format cible :", 178.0f, 16.0f, {100, 116, 139, 255});
 
-                // Zone Sélecteur (Dropdown) + Bouton [ Convertir ] côte à côte
                 const Rectangle dropdownBox{125.0f, 210.0f, 185.0f, 42.0f};
                 const Rectangle convertBtn{325.0f, 210.0f, 150.0f, 42.0f};
                 const Rectangle cancelBtn{220.0f, 298.0f, 160.0f, 36.0f};
 
-                // Les boutons sous-jacents sont désactivés quand le menu déroulant est ouvert pour éviter tout conflit de clic
                 if (drawButton(convertBtn, "Convertir", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE, !m_dropdownOpen)) {
                     if (!m_availableTargets.empty() && m_selectedTargetIndex < m_availableTargets.size()) {
                         m_converter.startConversion(m_currentFile, m_availableTargets[m_selectedTargetIndex]);
@@ -260,7 +351,6 @@ void App::render() {
                     break;
                 }
 
-                // Rendu du bouton principal de la liste déroulante
                 const Vector2 mousePos = GetMousePosition();
                 const bool headerHovered = CheckCollisionPointRec(mousePos, dropdownBox);
                 const Color headerBg = headerHovered ? Color{241, 245, 249, 255} : RAYWHITE;
@@ -283,7 +373,6 @@ void App::render() {
                     {30, 41, 59, 255}
                 );
 
-                // Petite flèche d'ouverture/fermeture à droite du sélecteur
                 const float arrowCenterX = dropdownBox.x + dropdownBox.width - 22.0f;
                 const float arrowCenterY = dropdownBox.y + dropdownBox.height / 2.0f;
                 if (m_dropdownOpen) {
@@ -302,14 +391,12 @@ void App::render() {
                     );
                 }
 
-                // Liste déroulante dépliée (dessinée en dernier pour passer au-dessus des autres éléments)
                 bool clickedInsideDropdown = false;
                 if (m_dropdownOpen && !m_availableTargets.empty()) {
                     const float itemHeight = 36.0f;
                     const float listHeight = static_cast<float>(m_availableTargets.size()) * itemHeight;
                     const Rectangle listBounds{dropdownBox.x, dropdownBox.y + dropdownBox.height + 4.0f, dropdownBox.width, listHeight};
 
-                    // Ombre légère et fond de la liste
                     DrawRectangleRounded({listBounds.x + 2.0f, listBounds.y + 3.0f, listBounds.width, listBounds.height}, 0.12f, 8, Fade(BLACK, 0.12f));
                     DrawRectangleRec(listBounds, RAYWHITE);
 
@@ -352,7 +439,6 @@ void App::render() {
                     DrawRectangleLinesEx(listBounds, 1.5f, {148, 163, 184, 255});
                 }
 
-                // Gestion de l'ouverture/fermeture au clic
                 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !clickedInsideDropdown) {
                     if (headerHovered) {
                         m_dropdownOpen = !m_dropdownOpen;
@@ -384,7 +470,6 @@ void App::render() {
                 drawCenteredText("Conversion terminée avec succès !", 118.0f, 22.0f, {22, 163, 74, 255});
                 drawCenteredText("Fichier généré :", 154.0f, 16.0f, {100, 116, 139, 255});
 
-                // Encadré dédié pour afficher le chemin de sortie (tronqué proprement si trop long)
                 const Rectangle pathBox{64.0f, 180.0f, static_cast<float>(WINDOW_WIDTH - 128), 38.0f};
                 DrawRectangleRounded(pathBox, 0.2f, 8, {241, 245, 249, 255});
                 DrawRectangleRoundedLinesEx(pathBox, 0.2f, 8, 1.0f, {203, 213, 225, 255});
