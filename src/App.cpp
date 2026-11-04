@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 
 namespace {
 
@@ -45,6 +46,62 @@ std::optional<std::filesystem::path> findFirstTtfInDir(const std::filesystem::pa
     return std::nullopt;
 }
 
+std::optional<std::filesystem::path> findAssetFile(const std::string& relativeName) {
+    const std::array<std::filesystem::path, 2> candidates = {
+        std::filesystem::path("assets") / relativeName,
+        std::filesystem::path("../assets") / relativeName
+    };
+
+    std::error_code ec;
+    for (const auto& path : candidates) {
+        if (std::filesystem::exists(path, ec) && std::filesystem::is_regular_file(path, ec)) {
+            return path;
+        }
+    }
+    return std::nullopt;
+}
+
+Image loadSvgImage(const std::filesystem::path& svgPath, int targetWidth, int targetHeight) {
+    std::error_code ec;
+    const std::string cacheFileName =
+        "." + svgPath.stem().string() + "_" + std::to_string(targetWidth) + "x" + std::to_string(targetHeight) + ".png";
+    const std::filesystem::path cachePng = svgPath.parent_path() / cacheFileName;
+
+    // 1. Chargement instantané depuis le cache PNG si déjà rastérisé et à jour
+    if (std::filesystem::exists(cachePng, ec)) {
+        const auto svgTime = std::filesystem::last_write_time(svgPath, ec);
+        const auto cacheTime = std::filesystem::last_write_time(cachePng, ec);
+        if (!ec && cacheTime >= svgTime) {
+            Image cachedImg = LoadImage(cachePng.string().c_str());
+            if (IsImageValid(cachedImg)) {
+                return cachedImg;
+            }
+        }
+    }
+
+    // 2. Sinon, rastérisation unique vers le fichier de cache PNG
+    std::string resizeArg;
+    if (targetWidth > 0 && targetHeight > 0) {
+        resizeArg = " -resize " + std::to_string(targetWidth) + "x" + std::to_string(targetHeight);
+    } else if (targetHeight > 0) {
+        resizeArg = " -resize x" + std::to_string(targetHeight);
+    }
+
+#ifdef _WIN32
+    const std::string cmd = "magick -background none \"" + svgPath.string() + "\"" +
+                            resizeArg + " PNG32:\"" + cachePng.string() + "\" > NUL 2>&1";
+#else
+    const std::string cmd = "magick -background none \"" + svgPath.string() + "\"" +
+                            resizeArg + " PNG32:\"" + cachePng.string() + "\" > /dev/null 2>&1";
+#endif
+
+    if (std::system(cmd.c_str()) == 0 && std::filesystem::exists(cachePng, ec)) {
+        return LoadImage(cachePng.string().c_str());
+    }
+
+    return Image{};
+}
+
 std::optional<std::filesystem::path> openNativeFileDialog() {
 #ifdef _WIN32
     const char* cmd =
@@ -52,17 +109,17 @@ std::optional<std::filesystem::path> openNativeFileDialog() {
         "Add-Type -AssemblyName System.Windows.Forms; "
         "$f = New-Object System.Windows.Forms.OpenFileDialog; "
         "$f.Title = 'Selectionner une image'; "
-        "$f.Filter = 'Images (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif|Tous les fichiers (*.*)|*.*'; "
+        "$f.Filter = 'Images (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.dng;*.cr2;*.nef;*.arw)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.dng;*.cr2;*.nef;*.arw|Tous les fichiers (*.*)|*.*'; "
         "if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }\"";
     FILE* pipe = _popen(cmd, "r");
 #else
     const char* cmd =
         "if command -v zenity >/dev/null 2>&1; then "
         "zenity --file-selection --title=\"Sélectionner une image\" "
-        "--file-filter=\"Images | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF\" "
+        "--file-filter=\"Images | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.heif *.HEIF *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW\" "
         "--file-filter=\"Tous les fichiers | *\" 2>/dev/null; "
         "elif command -v kdialog >/dev/null 2>&1; then "
-        "kdialog --getopenfilename . \"*.png *.jpg *.jpeg *.webp *.bmp *.gif|Images\" 2>/dev/null; "
+        "kdialog --getopenfilename . \"*.png *.jpg *.jpeg *.webp *.bmp *.gif *.heic *.tiff *.tif *.ico *.dng *.cr2 *.nef *.arw|Images\" 2>/dev/null; "
         "elif command -v yad >/dev/null 2>&1; then "
         "yad --file --title=\"Sélectionner une image\" 2>/dev/null; "
         "fi";
@@ -154,11 +211,53 @@ void App::unloadAppFont() {
     }
 }
 
+void App::loadAppIcon() {
+    const auto iconPath = findAssetFile("icon.svg");
+    if (!iconPath.has_value()) {
+        return;
+    }
+
+    Image iconImage = loadSvgImage(*iconPath, 64, 64);
+    if (IsImageValid(iconImage)) {
+        ImageFormat(&iconImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+        SetWindowIcon(iconImage);
+        UnloadImage(iconImage);
+    }
+}
+
+void App::loadAppLogo() {
+    const auto logoPath = findAssetFile("logo.svg");
+    if (!logoPath.has_value()) {
+        return;
+    }
+
+    // Chargement avec hauteur 2x plus petite (12px) en conservant le ratio du logo
+    Image logoImage = loadSvgImage(*logoPath, 0, 12);
+    if (IsImageValid(logoImage)) {
+        m_logoTexture = LoadTextureFromImage(logoImage);
+        UnloadImage(logoImage);
+
+        if (m_logoTexture.id != 0) {
+            SetTextureFilter(m_logoTexture, TEXTURE_FILTER_BILINEAR);
+            m_logoLoaded = true;
+        }
+    }
+}
+
+void App::unloadAppLogo() {
+    if (m_logoLoaded) {
+        UnloadTexture(m_logoTexture);
+        m_logoLoaded = false;
+    }
+}
+
 void App::run() {
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Convertix - Convertisseur d'Images");
     SetTargetFPS(60);
 
+    loadAppIcon();
     loadAppFont();
+    loadAppLogo();
 
     while (!WindowShouldClose()) {
         update();
@@ -168,6 +267,7 @@ void App::run() {
         EndDrawing();
     }
 
+    unloadAppLogo();
     unloadAppFont();
     CloseWindow();
 }
@@ -287,26 +387,28 @@ std::string App::fitTextToWidth(const std::string& text, float fontSize, float m
 void App::render() {
     ClearBackground({245, 247, 250, 255});
 
-    // En-tête
-    DrawRectangle(0, 0, WINDOW_WIDTH, 54, {30, 41, 59, 255});
-    drawCenteredText("Convertix - Convertisseur d'Images", 16.0f, 22.0f, RAYWHITE);
-
     if (!m_magickAvailable) {
-        DrawRectangle(0, 54, WINDOW_WIDTH, 28, {254, 226, 226, 255});
-        drawCenteredText("Attention : ImageMagick ('magick') introuvable dans le PATH", 59.0f, 16.0f, MAROON);
+        DrawRectangle(0, 0, WINDOW_WIDTH, 26, {254, 226, 226, 255});
+        drawCenteredText("Attention : ImageMagick ('magick') introuvable dans le PATH", 5.0f, 15.0f, MAROON);
     }
 
-    const Rectangle dropZone{40.0f, 85.0f, static_cast<float>(WINDOW_WIDTH - 80), 275.0f};
+    // Logo discret en haut à gauche de la fenêtre (12px de haut)
+    if (m_logoLoaded) {
+        DrawTexture(m_logoTexture, 36, 12, WHITE);
+    }
+
+    // Zone principale de glisser-déposer
+    const Rectangle dropZone{36.0f, 34.0f, static_cast<float>(WINDOW_WIDTH - 72), 330.0f};
     DrawRectangleRounded(dropZone, 0.06f, 8, RAYWHITE);
     drawDashedRect(dropZone, 12.0f, 8.0f, 2.0f, {148, 163, 184, 255});
 
     switch (m_state) {
         case AppState::WAITING_DROP: {
-            drawCenteredText("Glissez et déposez une image ici", 150.0f, 22.0f, {51, 65, 85, 255});
-            drawCenteredText("Formats supportés : PNG, JPEG, WEBP, BMP, GIF", 185.0f, 16.0f, {100, 116, 139, 255});
-            drawCenteredText("— ou —", 220.0f, 16.0f, {148, 163, 184, 255});
+            drawCenteredText("Glissez et déposez une image ici", 118.0f, 22.0f, {51, 65, 85, 255});
+            drawCenteredText("PNG, JPEG, WEBP, HEIC, TIFF, ICO, RAW, BMP, GIF", 156.0f, 15.0f, {100, 116, 139, 255});
+            drawCenteredText("- ou -", 196.0f, 16.0f, {148, 163, 184, 255});
 
-            const Rectangle importBtn{210.0f, 255.0f, 180.0f, 44.0f};
+            const Rectangle importBtn{210.0f, 232.0f, 180.0f, 44.0f};
             const std::string importLabel = m_fileDialogOpen ? "Ouverture..." : "Importer";
             const Color baseCol = m_fileDialogOpen ? Color{148, 163, 184, 255} : Color{37, 99, 235, 255};
             if (drawButton(importBtn, importLabel, baseCol, {29, 78, 216, 255}, RAYWHITE, !m_fileDialogOpen)) {
@@ -318,24 +420,24 @@ void App::render() {
         case AppState::FILE_DETECTED: {
             const std::string rawFileName = m_currentFile.filename().string();
             const std::string displayFileName = fitTextToWidth("Fichier : " + rawFileName, 20.0f, dropZone.width - 40.0f, false);
-            drawCenteredText(displayFileName, 108.0f, 20.0f, {30, 41, 59, 255});
+            drawCenteredText(displayFileName, 64.0f, 20.0f, {30, 41, 59, 255});
 
             if (m_detectedType == FileType::UNKNOWN) {
-                drawCenteredText("Format non supporté", 165.0f, 22.0f, {220, 38, 38, 255});
-                drawCenteredText("Signature binaire (Magic Bytes) non reconnue.", 198.0f, 16.0f, {100, 116, 139, 255});
+                drawCenteredText("Format non supporté", 130.0f, 22.0f, {220, 38, 38, 255});
+                drawCenteredText("Signature binaire (Magic Bytes) non reconnue.", 165.0f, 16.0f, {100, 116, 139, 255});
 
-                const Rectangle resetBtn{200.0f, 260.0f, 200.0f, 42.0f};
+                const Rectangle resetBtn{200.0f, 235.0f, 200.0f, 42.0f};
                 if (drawButton(resetBtn, "Réinitialiser", {71, 85, 105, 255}, {51, 65, 85, 255}, RAYWHITE)) {
                     resetState();
                 }
             } else {
                 const std::string detectedStr = "Format réel détecté : " + FileDetector::toString(m_detectedType);
-                drawCenteredText(detectedStr, 142.0f, 18.0f, {22, 163, 74, 255});
-                drawCenteredText("Sélectionnez le format cible :", 178.0f, 16.0f, {100, 116, 139, 255});
+                drawCenteredText(detectedStr, 98.0f, 18.0f, {22, 163, 74, 255});
+                drawCenteredText("Sélectionnez le format cible :", 134.0f, 16.0f, {100, 116, 139, 255});
 
-                const Rectangle dropdownBox{125.0f, 210.0f, 185.0f, 42.0f};
-                const Rectangle convertBtn{325.0f, 210.0f, 150.0f, 42.0f};
-                const Rectangle cancelBtn{220.0f, 298.0f, 160.0f, 36.0f};
+                const Rectangle dropdownBox{125.0f, 166.0f, 185.0f, 40.0f};
+                const Rectangle convertBtn{325.0f, 166.0f, 150.0f, 40.0f};
+                const Rectangle cancelBtn{220.0f, 286.0f, 160.0f, 36.0f};
 
                 if (drawButton(convertBtn, "Convertir", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE, !m_dropdownOpen)) {
                     if (!m_availableTargets.empty() && m_selectedTargetIndex < m_availableTargets.size()) {
@@ -393,9 +495,9 @@ void App::render() {
 
                 bool clickedInsideDropdown = false;
                 if (m_dropdownOpen && !m_availableTargets.empty()) {
-                    const float itemHeight = 36.0f;
+                    const float itemHeight = 32.0f;
                     const float listHeight = static_cast<float>(m_availableTargets.size()) * itemHeight;
-                    const Rectangle listBounds{dropdownBox.x, dropdownBox.y + dropdownBox.height + 4.0f, dropdownBox.width, listHeight};
+                    const Rectangle listBounds{dropdownBox.x, dropdownBox.y + dropdownBox.height + 3.0f, dropdownBox.width, listHeight};
 
                     DrawRectangleRounded({listBounds.x + 2.0f, listBounds.y + 3.0f, listBounds.width, listBounds.height}, 0.12f, 8, Fade(BLACK, 0.12f));
                     DrawRectangleRec(listBounds, RAYWHITE);
@@ -453,10 +555,10 @@ void App::render() {
         case AppState::CONVERTING: {
             const float time = static_cast<float>(GetTime());
             const float startAngle = time * 360.0f;
-            DrawRing({static_cast<float>(WINDOW_WIDTH) / 2.0f, 185.0f}, 18.0f, 24.0f, startAngle, startAngle + 270.0f, 32, {37, 99, 235, 255});
+            DrawRing({static_cast<float>(WINDOW_WIDTH) / 2.0f, 155.0f}, 18.0f, 24.0f, startAngle, startAngle + 270.0f, 32, {37, 99, 235, 255});
 
-            drawCenteredText("Conversion en cours...", 235.0f, 22.0f, {30, 41, 59, 255});
-            drawCenteredText("Traitement asynchrone via ImageMagick", 268.0f, 16.0f, {100, 116, 139, 255});
+            drawCenteredText("Conversion en cours...", 205.0f, 22.0f, {30, 41, 59, 255});
+            drawCenteredText("Traitement asynchrone via ImageMagick", 238.0f, 16.0f, {100, 116, 139, 255});
             break;
         }
 
@@ -467,10 +569,10 @@ void App::render() {
                 const std::filesystem::path absPath = std::filesystem::weakly_canonical(outPath, ec);
                 const std::string rawPathStr = ec ? outPath.string() : absPath.string();
 
-                drawCenteredText("Conversion terminée avec succès !", 118.0f, 22.0f, {22, 163, 74, 255});
-                drawCenteredText("Fichier généré :", 154.0f, 16.0f, {100, 116, 139, 255});
+                drawCenteredText("Conversion terminée avec succès !", 85.0f, 22.0f, {22, 163, 74, 255});
+                drawCenteredText("Fichier généré :", 122.0f, 16.0f, {100, 116, 139, 255});
 
-                const Rectangle pathBox{64.0f, 180.0f, static_cast<float>(WINDOW_WIDTH - 128), 38.0f};
+                const Rectangle pathBox{64.0f, 150.0f, static_cast<float>(WINDOW_WIDTH - 128), 38.0f};
                 DrawRectangleRounded(pathBox, 0.2f, 8, {241, 245, 249, 255});
                 DrawRectangleRoundedLinesEx(pathBox, 0.2f, 8, 1.0f, {203, 213, 225, 255});
 
@@ -486,13 +588,13 @@ void App::render() {
                     {30, 41, 59, 255}
                 );
             } else {
-                drawCenteredText("Erreur lors de la conversion", 145.0f, 22.0f, {220, 38, 38, 255});
-                drawCenteredText("Vérifiez qu'ImageMagick ('magick') est installé.", 182.0f, 16.0f, {100, 116, 139, 255});
+                drawCenteredText("Erreur lors de la conversion", 115.0f, 22.0f, {220, 38, 38, 255});
+                drawCenteredText("Vérifiez qu'ImageMagick ('magick') est installé.", 152.0f, 16.0f, {100, 116, 139, 255});
             }
 
-            drawCenteredText("Glissez un autre fichier ou cliquez ci-dessous :", 238.0f, 16.0f, {100, 116, 139, 255});
+            drawCenteredText("Glissez un autre fichier ou cliquez ci-dessous :", 212.0f, 16.0f, {100, 116, 139, 255});
 
-            const Rectangle newFileBtn{200.0f, 272.0f, 200.0f, 44.0f};
+            const Rectangle newFileBtn{200.0f, 248.0f, 200.0f, 44.0f};
             if (drawButton(newFileBtn, "Nouveau fichier", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE)) {
                 resetState();
             }

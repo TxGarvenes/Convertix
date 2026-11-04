@@ -9,6 +9,11 @@ enum class FileType {
     BMP,
     GIF,
     WEBP,
+    HEIC,
+    TIFF,
+    ICO,
+    RAW,
+    PDF,
     UNKNOWN
 };
 

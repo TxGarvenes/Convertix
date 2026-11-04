@@ -1,6 +1,7 @@
 #include "Converter.hpp"
 
 #include <cstdlib>
+#include <sstream>
 #include <string>
 
 Converter::~Converter() {
@@ -10,6 +11,24 @@ Converter::~Converter() {
 }
 
 bool Converter::isMagickAvailable() const {
+    if (const char* pathEnv = std::getenv("PATH")) {
+        std::stringstream ss(pathEnv);
+        std::string dir;
+#ifdef _WIN32
+        const char delimiter = ';';
+        const std::string exeName = "magick.exe";
+#else
+        const char delimiter = ':';
+        const std::string exeName = "magick";
+#endif
+        std::error_code ec;
+        while (std::getline(ss, dir, delimiter)) {
+            if (!dir.empty() && std::filesystem::exists(std::filesystem::path(dir) / exeName, ec)) {
+                return true;
+            }
+        }
+    }
+
 #ifdef _WIN32
     const int ret = std::system("magick -version > NUL 2>&1");
 #else
@@ -43,10 +62,14 @@ void Converter::startConversion(const std::filesystem::path& input, FileType tar
 
     m_status.store(ConversionStatus::IN_PROGRESS);
 
-    m_task = std::async(std::launch::async, [this, input, outputPath, ext]() {
+    m_task = std::async(std::launch::async, [this, input, outputPath, targetType, ext]() {
         std::string options;
-        if (ext == ".jpg" || ext == ".jpeg") {
+        if (targetType == FileType::JPEG || ext == ".jpg" || ext == ".jpeg") {
+            // Suppression de la transparence uniquement pour JPEG (conservation de l'alpha pour PNG, WEBP, TIFF, ICO)
             options = " -background white -alpha remove -alpha off";
+        } else if (targetType == FileType::ICO || ext == ".ico") {
+            // Redimensionnement automatique multi-résolution pour ICO (max 256x256) tout en conservant le canal alpha
+            options = " -define icon:auto-resize=256,128,64,48,32,16";
         }
 
         const std::string command =

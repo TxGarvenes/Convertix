@@ -46,8 +46,14 @@ private:
     Font m_font{};
     bool m_customFontLoaded{false};
 
+    Texture2D m_logoTexture{};
+    bool m_logoLoaded{false};
+
     void loadAppFont();
     void unloadAppFont();
+    void loadAppIcon();
+    void loadAppLogo();
+    void unloadAppLogo();
 
     void selectFile(const std::filesystem::path& filePath);
     void openFileDialogAsync();
