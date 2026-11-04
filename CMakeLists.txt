@@ -11,11 +11,19 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+find_package(Threads REQUIRED)
+
 add_executable(convertix
     src/main.cpp
     src/FileDetector.cpp
+    src/FormatMatrix.cpp
+    src/Converter.cpp
 )
 
 target_include_directories(convertix PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(convertix PRIVATE
+    Threads::Threads
 )
