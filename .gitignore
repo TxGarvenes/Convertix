@@ -1,2 +1,13 @@
 node_modules/
 .env
+build/
+bin/*.exe
+
+*.o
+*.obj
+*.exe
+
+.vscode/
+.idea/
+
+SPEC.md
