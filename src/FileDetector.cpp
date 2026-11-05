@@ -45,11 +45,15 @@ FileType FileDetector::detect(const std::filesystem::path& filePath) {
     file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     const auto bytesRead = file.gcount();
 
+    const std::string ext = getLowerExtension(filePath);
+
     if (bytesRead < 2) {
+        if (ext == ".txt") return FileType::TXT;
+        if (ext == ".md" || ext == ".markdown") return FileType::MD;
+        if (ext == ".html" || ext == ".htm") return FileType::HTML;
         return FileType::UNKNOWN;
     }
 
-    const std::string ext = getLowerExtension(filePath);
     const std::string headerAscii = toLowerAscii(
         std::string(reinterpret_cast<const char*>(bytes.data()), static_cast<std::size_t>(bytesRead))
     );
@@ -199,12 +203,45 @@ FileType FileDetector::detect(const std::filesystem::path& filePath) {
         return FileType::BMP;
     }
 
-    // 16. SVG (recherche de "<svg" dans les 512 premiers octets)
+    // 16. Conteneurs ZIP (DOCX / ODT): 50 4B 03 04 (ou 50 4B 05 06 / 50 4B 07 08)
+    if (bytesRead >= 4 &&
+        bytes[0] == 0x50 && bytes[1] == 0x4B &&
+        ((bytes[2] == 0x03 && bytes[3] == 0x04) ||
+         (bytes[2] == 0x05 && bytes[3] == 0x06) ||
+         (bytes[2] == 0x07 && bytes[3] == 0x08))) {
+        if (ext == ".docx") {
+            return FileType::DOCX;
+        }
+        if (ext == ".odt") {
+            return FileType::ODT;
+        }
+    }
+
+    // 17. SVG (recherche de "<svg" dans les 512 premiers octets)
     if (headerAscii.find("<svg") != std::string::npos) {
         return FileType::SVG;
     }
 
-    // 17. Fallback par extension pour RAW et conteneurs vidéo à métadonnées variables
+    // 18. Documents texte / balisés (HTML, MD, TXT)
+    if (ext == ".html" || ext == ".htm" ||
+        headerAscii.find("<!doctype html") != std::string::npos ||
+        headerAscii.find("<html") != std::string::npos) {
+        return FileType::HTML;
+    }
+    if (ext == ".md" || ext == ".markdown") {
+        return FileType::MD;
+    }
+    if (ext == ".txt") {
+        return FileType::TXT;
+    }
+    if (ext == ".docx") {
+        return FileType::DOCX;
+    }
+    if (ext == ".odt") {
+        return FileType::ODT;
+    }
+
+    // 19. Fallback par extension pour RAW et conteneurs vidéo à métadonnées variables
     if (isRawExtension(ext)) {
         return FileType::RAW;
     }

@@ -314,7 +314,7 @@ void Converter::startConversion(const std::filesystem::path& input, FileType sou
         std::string command;
         if (usePandoc) {
             const std::string pandocCmd = resolveToolPath("pandoc");
-            command = pandocCmd + " \"" + input.string() + "\" -o \"" +
+            command = pandocCmd + " -s \"" + input.string() + "\" -o \"" +
                       outputPath.string() + "\"" + silentRedirect;
         } else {
             const std::string magickCmd = resolveToolPath("magick");

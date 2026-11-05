@@ -67,6 +67,17 @@ std::vector<FileType> FormatMatrix::getAvailableTargets(FileType sourceType) {
                 sourceType
             );
 
+        // Documents -> DOCX, ODT, MD, HTML, TXT (moins le format source, cloisonnement strict)
+        case FileType::DOCX:
+        case FileType::ODT:
+        case FileType::MD:
+        case FileType::HTML:
+        case FileType::TXT:
+            return filterOutSource(
+                {FileType::DOCX, FileType::ODT, FileType::MD, FileType::HTML, FileType::TXT},
+                sourceType
+            );
+
         case FileType::UNKNOWN:
         default:
             return {};

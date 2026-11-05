@@ -120,21 +120,22 @@ std::optional<std::filesystem::path> openNativeFileDialog() {
         "powershell -NoProfile -Command \""
         "Add-Type -AssemblyName System.Windows.Forms; "
         "$f = New-Object System.Windows.Forms.OpenFileDialog; "
-        "$f.Title = 'Selectionner un fichier media'; "
-        "$f.Filter = 'Medias (Image, Audio, Video)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.svg;*.dng;*.cr2;*.nef;*.arw;*.mp3;*.wav;*.flac;*.ogg;*.aac;*.m4a;*.mp4;*.mkv;*.avi;*.mov;*.webm|Tous les fichiers (*.*)|*.*'; "
+        "$f.Title = 'Selectionner un fichier'; "
+        "$f.Filter = 'Tous les fichiers supportes|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.svg;*.dng;*.cr2;*.nef;*.arw;*.mp3;*.wav;*.flac;*.ogg;*.aac;*.m4a;*.mp4;*.mkv;*.avi;*.mov;*.webm;*.docx;*.odt;*.md;*.html;*.htm;*.txt|Tous les fichiers (*.*)|*.*'; "
         "if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }\"";
     FILE* pipe = _popen(cmd, "r");
 #else
     const char* cmd =
         "if command -v zenity >/dev/null 2>&1; then "
         "zenity --file-selection --title=\"Sélectionner un fichier\" "
-        "--file-filter=\"Médias (Image, Audio, Vidéo) | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.heif *.HEIF *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.svg *.SVG *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.ogg *.OGG *.aac *.AAC *.m4a *.M4A *.mp4 *.MP4 *.mkv *.MKV *.avi *.AVI *.mov *.MOV *.webm *.WEBM\" "
+        "--file-filter=\"Fichiers supportés (Image, Audio, Vidéo, Document) | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.heif *.HEIF *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.svg *.SVG *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.ogg *.OGG *.aac *.AAC *.m4a *.M4A *.mp4 *.MP4 *.mkv *.MKV *.avi *.AVI *.mov *.MOV *.webm *.WEBM *.docx *.DOCX *.odt *.ODT *.md *.MD *.html *.HTML *.htm *.HTM *.txt *.TXT\" "
         "--file-filter=\"Images | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.svg *.SVG *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW\" "
         "--file-filter=\"Audio | *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.ogg *.OGG *.aac *.AAC *.m4a *.M4A\" "
         "--file-filter=\"Vidéo | *.mp4 *.MP4 *.mkv *.MKV *.avi *.AVI *.mov *.MOV *.webm *.WEBM\" "
+        "--file-filter=\"Documents | *.docx *.DOCX *.odt *.ODT *.md *.MD *.html *.HTML *.htm *.HTM *.txt *.TXT\" "
         "--file-filter=\"Tous les fichiers | *\" 2>/dev/null; "
         "elif command -v kdialog >/dev/null 2>&1; then "
-        "kdialog --getopenfilename . \"*.png *.jpg *.jpeg *.webp *.bmp *.gif *.heic *.tiff *.tif *.ico *.svg *.dng *.cr2 *.nef *.arw *.mp3 *.wav *.flac *.ogg *.aac *.m4a *.mp4 *.mkv *.avi *.mov *.webm|Médias\" 2>/dev/null; "
+        "kdialog --getopenfilename . \"*.png *.jpg *.jpeg *.webp *.bmp *.gif *.heic *.tiff *.tif *.ico *.svg *.dng *.cr2 *.nef *.arw *.mp3 *.wav *.flac *.ogg *.aac *.m4a *.mp4 *.mkv *.avi *.mov *.webm *.docx *.odt *.md *.html *.htm *.txt|Fichiers supportés\" 2>/dev/null; "
         "elif command -v yad >/dev/null 2>&1; then "
         "yad --file --title=\"Sélectionner un fichier\" 2>/dev/null; "
         "fi";
@@ -442,13 +443,14 @@ void App::render() {
 
     switch (m_state) {
         case AppState::WAITING_DROP: {
-            drawCenteredText("Glissez un fichier ici (Image, Audio, Vidéo...)", 102.0f, 21.0f, {51, 65, 85, 255});
-            drawCenteredText("Images : PNG, JPG, WEBP, SVG, HEIC, TIFF, ICO, RAW, GIF", 142.0f, 14.0f, {100, 116, 139, 255});
-            drawCenteredText("Audio : MP3, WAV, FLAC, OGG, AAC, M4A", 164.0f, 14.0f, {100, 116, 139, 255});
-            drawCenteredText("Vidéo : MP4, MKV, AVI, MOV, WEBM", 186.0f, 14.0f, {100, 116, 139, 255});
-            drawCenteredText("- ou -", 216.0f, 16.0f, {148, 163, 184, 255});
+            drawCenteredText("Glissez un fichier ici (Image, Audio, Vidéo, Document...)", 92.0f, 19.5f, {51, 65, 85, 255});
+            drawCenteredText("Images : PNG, JPG, WEBP, SVG, HEIC, TIFF, ICO, RAW, GIF", 132.0f, 14.0f, {100, 116, 139, 255});
+            drawCenteredText("Audio : MP3, WAV, FLAC, OGG, AAC, M4A", 152.0f, 14.0f, {100, 116, 139, 255});
+            drawCenteredText("Vidéo : MP4, MKV, AVI, MOV, WEBM", 172.0f, 14.0f, {100, 116, 139, 255});
+            drawCenteredText("Documents : DOCX, ODT, MD, HTML, TXT", 192.0f, 14.0f, {100, 116, 139, 255});
+            drawCenteredText("- ou -", 220.0f, 16.0f, {148, 163, 184, 255});
 
-            const Rectangle importBtn{210.0f, 246.0f, 180.0f, 44.0f};
+            const Rectangle importBtn{210.0f, 250.0f, 180.0f, 44.0f};
             const std::string importLabel = m_fileDialogOpen ? "Ouverture..." : "Importer";
             const Color baseCol = m_fileDialogOpen ? Color{148, 163, 184, 255} : Color{37, 99, 235, 255};
             if (drawButton(importBtn, importLabel, baseCol, {29, 78, 216, 255}, RAYWHITE, !m_fileDialogOpen)) {
@@ -672,9 +674,12 @@ void App::render() {
                 DrawRing({static_cast<float>(WINDOW_WIDTH) / 2.0f, 155.0f}, 18.0f, 24.0f, startAngle, startAngle + 270.0f, 32, {37, 99, 235, 255});
 
                 drawCenteredText("Conversion en cours...", 205.0f, 22.0f, {30, 41, 59, 255});
-                const std::string engineSub = (m_detectedCategory == FileCategory::AUDIO)
-                    ? "Traitement asynchrone via FFmpeg"
-                    : "Traitement asynchrone via ImageMagick";
+                std::string engineSub = "Traitement asynchrone via ImageMagick";
+                if (m_detectedCategory == FileCategory::AUDIO) {
+                    engineSub = "Traitement asynchrone via FFmpeg";
+                } else if (m_detectedCategory == FileCategory::DOCUMENT) {
+                    engineSub = "Traitement asynchrone via Pandoc";
+                }
                 drawCenteredText(engineSub, 238.0f, 16.0f, {100, 116, 139, 255});
             }
             break;
@@ -766,9 +771,12 @@ void App::render() {
                 }
             } else if (status == ConversionStatus::MISSING_TOOL) {
                 drawCenteredText("Outil CLI manquant", 115.0f, 22.0f, {220, 38, 38, 255});
-                const std::string missingMsg = (m_detectedCategory == FileCategory::AUDIO || m_detectedCategory == FileCategory::VIDEO)
-                    ? "Veuillez installer FFmpeg ('ffmpeg') ou le placer dans bin/ffmpeg/."
-                    : "Veuillez installer ImageMagick ('magick') ou le placer dans bin/imagemagick/.";
+                std::string missingMsg = "Veuillez installer ImageMagick ('magick') ou le placer dans bin/imagemagick/.";
+                if (m_detectedCategory == FileCategory::AUDIO || m_detectedCategory == FileCategory::VIDEO) {
+                    missingMsg = "Veuillez installer FFmpeg ('ffmpeg') ou le placer dans bin/ffmpeg/.";
+                } else if (m_detectedCategory == FileCategory::DOCUMENT) {
+                    missingMsg = "Veuillez installer Pandoc ('pandoc') ou le placer dans bin/pandoc/.";
+                }
                 drawCenteredText(missingMsg, 152.0f, 15.0f, {100, 116, 139, 255});
             } else {
                 drawCenteredText("Erreur lors de la conversion", 115.0f, 22.0f, {220, 38, 38, 255});
