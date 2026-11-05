@@ -161,8 +161,8 @@ bool Converter::checkToolsAvailability() {
     m_hasMagick = isToolAvailable("magick");
     m_hasFfmpeg = isToolAvailable("ffmpeg");
     m_hasPandoc = isToolAvailable("pandoc");
-    m_hasPotrace = isToolAvailable("potrace");
-    return m_hasMagick || m_hasFfmpeg || m_hasPandoc || m_hasPotrace;
+    m_hasVTracer = isToolAvailable("vtracer");
+    return m_hasMagick || m_hasFfmpeg || m_hasPandoc || m_hasVTracer;
 }
 
 bool Converter::isMagickAvailable() const {
@@ -181,8 +181,8 @@ bool Converter::isPandocAvailable() const {
     return m_hasPandoc;
 }
 
-bool Converter::isPotraceAvailable() const {
-    return m_hasPotrace;
+bool Converter::isVTracerAvailable() const {
+    return m_hasVTracer;
 }
 
 void Converter::startConversion(const std::filesystem::path& input, FileType targetType) {
@@ -209,15 +209,17 @@ void Converter::startConversion(const std::filesystem::path& input, FileType sou
     const FileCategory sourceCat = FileDetector::getCategory(sourceType);
     const FileCategory targetCat = FileDetector::getCategory(targetType);
 
-    const bool usePotraceSvg = (sourceCat == FileCategory::IMAGE && targetType == FileType::SVG);
-    const bool useFfmpeg = (!usePotraceSvg &&
+    const bool useVTracerSvg = (sourceCat == FileCategory::IMAGE && targetType == FileType::SVG);
+    const bool needsTempPngForVTracer =
+        useVTracerSvg && (sourceType != FileType::PNG && sourceType != FileType::JPEG);
+    const bool useFfmpeg = (!useVTracerSvg &&
                             (sourceCat == FileCategory::AUDIO || sourceCat == FileCategory::VIDEO ||
                              targetCat == FileCategory::AUDIO || targetCat == FileCategory::VIDEO));
-    const bool usePandoc = (!usePotraceSvg && !useFfmpeg &&
+    const bool usePandoc = (!useFfmpeg && !useVTracerSvg &&
                             sourceCat == FileCategory::DOCUMENT && targetCat == FileCategory::DOCUMENT);
-    const bool useMagick = (!usePotraceSvg && !useFfmpeg && !usePandoc);
+    const bool useMagick = (!useVTracerSvg && !useFfmpeg && !usePandoc);
 
-    if ((usePotraceSvg && (!isMagickAvailable() || !isPotraceAvailable())) ||
+    if ((useVTracerSvg && (!isVTracerAvailable() || (needsTempPngForVTracer && !isMagickAvailable()))) ||
         (useFfmpeg && !isFFmpegAvailable()) ||
         (useMagick && !isMagickAvailable()) ||
         (usePandoc && !isPandocAvailable())) {
@@ -225,7 +227,7 @@ void Converter::startConversion(const std::filesystem::path& input, FileType sou
         return;
     }
 
-    const std::string outputFileName = input.stem().string() + "_converted" + ext;
+    const std::string outputFileName = input.stem().string() + "_cix" + ext;
     const std::filesystem::path outputPath = input.parent_path() / outputFileName;
 
     {
@@ -235,50 +237,59 @@ void Converter::startConversion(const std::filesystem::path& input, FileType sou
 
     m_status.store(ConversionStatus::IN_PROGRESS);
 
-    m_task = std::async(std::launch::async, [this, input, outputPath, sourceCat, targetCat, targetType, ext, usePotraceSvg, useFfmpeg, usePandoc]() {
+    m_task = std::async(std::launch::async, [this, input, outputPath, sourceType, sourceCat, targetCat, targetType, ext, useVTracerSvg, needsTempPngForVTracer, useFfmpeg, usePandoc]() {
 #if defined(_WIN32)
         const std::string silentRedirect = " > NUL 2>&1";
 #else
         const std::string silentRedirect = " > /dev/null 2>&1";
 #endif
 
-        if (usePotraceSvg) {
+        if (useVTracerSvg) {
             std::error_code ec;
-            const std::filesystem::path tempBmp =
-                std::filesystem::temp_directory_path(ec) / "temp_potrace.bmp";
+            std::filesystem::path vtracerInput = input;
+            std::filesystem::path tempPng;
 
-            const std::string magickCmd = resolveToolPath("magick");
-            const std::string potraceCmd = resolveToolPath("potrace");
-
-            // Passe 1 (ImageMagick) : Conversion en BMP monochrome avec seuillage à 50%
-            std::string pass1Cmd = magickCmd + " \"" + input.string() +
-                                   "\" -background white -alpha remove -alpha off -colorspace Gray -threshold 50% \"" +
-                                   tempBmp.string() + "\"" + silentRedirect;
+            if (needsTempPngForVTracer) {
+                tempPng = std::filesystem::temp_directory_path(ec) / "temp_vtracer_input.png";
+                const std::string magickCmd = resolveToolPath("magick");
+                const std::string inputSpec = (sourceType == FileType::ICO)
+                    ? (input.string() + "[0]")
+                    : input.string();
+                std::string prepCmd = magickCmd + " \"" + inputSpec +
+                                      "\" -colorspace sRGB -define png:color-type=6 -alpha on \"" +
+                                      tempPng.string() + "\"" + silentRedirect;
 #if defined(_WIN32)
-            if (!pass1Cmd.empty() && pass1Cmd.front() == '"') {
-                pass1Cmd = "\"" + pass1Cmd + "\"";
-            }
-#endif
-            const int res1 = std::system(pass1Cmd.c_str());
-
-            int res2 = -1;
-            if (res1 == 0 && std::filesystem::exists(tempBmp, ec)) {
-                m_progress.store(50.0f);
-                // Passe 2 (Potrace) : Vectorisation du BMP vers SVG (-s)
-                std::string pass2Cmd = potraceCmd + " \"" + tempBmp.string() +
-                                       "\" -s -o \"" + outputPath.string() + "\"" + silentRedirect;
-#if defined(_WIN32)
-                if (!pass2Cmd.empty() && pass2Cmd.front() == '"') {
-                    pass2Cmd = "\"" + pass2Cmd + "\"";
+                if (!prepCmd.empty() && prepCmd.front() == '"') {
+                    prepCmd = "\"" + prepCmd + "\"";
                 }
 #endif
-                res2 = std::system(pass2Cmd.c_str());
+                const int prepRes = std::system(prepCmd.c_str());
+                if (prepRes != 0 || !std::filesystem::exists(tempPng, ec)) {
+                    std::filesystem::remove(tempPng, ec);
+                    m_status.store(ConversionStatus::ERROR_CLI);
+                    return;
+                }
+                vtracerInput = tempPng;
             }
 
-            // Nettoyage systématique du fichier temporaire
-            std::filesystem::remove(tempBmp, ec);
+            const std::string vtracerCmd = resolveToolPath("vtracer");
+            std::string command = vtracerCmd +
+                                  " --input \"" + vtracerInput.string() +
+                                  "\" --output \"" + outputPath.string() +
+                                  "\" --colormode color --hierarchical stacked" +
+                                  silentRedirect;
+#if defined(_WIN32)
+            if (!command.empty() && command.front() == '"') {
+                command = "\"" + command + "\"";
+            }
+#endif
+            const int result = std::system(command.c_str());
 
-            if (res1 == 0 && res2 == 0 && std::filesystem::exists(outputPath, ec)) {
+            if (!tempPng.empty()) {
+                std::filesystem::remove(tempPng, ec);
+            }
+
+            if (result == 0 && std::filesystem::exists(outputPath, ec)) {
                 m_progress.store(100.0f);
                 m_status.store(ConversionStatus::SUCCESS);
             } else {
@@ -371,13 +382,24 @@ void Converter::startConversion(const std::filesystem::path& input, FileType sou
                       outputPath.string() + "\"" + silentRedirect;
         } else {
             const std::string magickCmd = resolveToolPath("magick");
-            std::string options;
-            if (targetType == FileType::JPEG || ext == ".jpg" || ext == ".jpeg") {
-                options = " -background white -alpha remove -alpha off";
-            } else if (targetType == FileType::ICO || ext == ".ico") {
-                options = " -define icon:auto-resize=256,128,64,48,32,16";
+            std::string preInputOptions;
+            if (sourceType == FileType::SVG &&
+                (targetType == FileType::PNG || targetType == FileType::WEBP ||
+                 targetType == FileType::TIFF || targetType == FileType::ICO)) {
+                preInputOptions = " -background none";
             }
-            command = magickCmd + " \"" + input.string() + "\"" + options +
+
+            const std::string inputSpec = (sourceType == FileType::ICO)
+                ? (input.string() + "[0]")
+                : input.string();
+
+            std::string postInputOptions;
+            if (targetType == FileType::JPEG || ext == ".jpg" || ext == ".jpeg") {
+                postInputOptions = " -background white -alpha remove -alpha off";
+            } else if (targetType == FileType::ICO || ext == ".ico") {
+                postInputOptions = " -define icon:auto-resize=256,128,64,48,32,16";
+            }
+            command = magickCmd + preInputOptions + " \"" + inputSpec + "\"" + postInputOptions +
                       " \"" + outputPath.string() + "\"" + silentRedirect;
         }
 

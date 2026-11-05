@@ -31,7 +31,7 @@ public:
     bool isFFmpegAvailable() const;
     bool isFfmpegAvailable() const;
     bool isPandocAvailable() const;
-    bool isPotraceAvailable() const;
+    bool isVTracerAvailable() const;
 
     void startConversion(const std::filesystem::path& input, FileType sourceType, FileType targetType);
     void startConversion(const std::filesystem::path& input, FileType targetType);
@@ -51,7 +51,7 @@ private:
     bool m_hasMagick{false};
     bool m_hasFfmpeg{false};
     bool m_hasPandoc{false};
-    bool m_hasPotrace{false};
+    bool m_hasVTracer{false};
 
     static bool isToolAvailable(const std::string& toolName);
     static double probeMediaDurationSeconds(const std::filesystem::path& input);

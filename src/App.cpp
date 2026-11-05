@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <sstream>
+#include <thread>
 
 namespace {
 
@@ -112,6 +113,57 @@ Image loadSvgImage(const std::filesystem::path& svgPath, int targetWidth, int ta
     }
 
     return Image{};
+}
+
+void detectImageDimensions(const std::filesystem::path& filePath, int& outWidth, int& outHeight) {
+    outWidth = 0;
+    outHeight = 0;
+
+    // 1. Tentative rapide en mémoire via Raylib
+    SetTraceLogLevel(LOG_ERROR);
+    Image img = LoadImage(filePath.string().c_str());
+    SetTraceLogLevel(LOG_INFO);
+
+    if (IsImageValid(img)) {
+        outWidth = img.width;
+        outHeight = img.height;
+        UnloadImage(img);
+        return;
+    }
+
+    // 2. Fallback d'inspection d'en-tête (-ping) via ImageMagick pour WEBP/TIFF/HEIC/ICO
+    const std::string magickCmd = Converter::resolveToolPath("magick");
+    std::string cmd = magickCmd + " identify -ping -format \"%w %h\\n\" \"" + filePath.string() + "[0]\" 2>/dev/null";
+#ifdef _WIN32
+    cmd = magickCmd + " identify -ping -format \"%w %h\\n\" \"" + filePath.string() + "[0]\" 2>NUL";
+    if (!cmd.empty() && cmd.front() == '"') {
+        cmd = "\"" + cmd + "\"";
+    }
+    FILE* pipe = _popen(cmd.c_str(), "r");
+#else
+    FILE* pipe = popen(cmd.c_str(), "r");
+#endif
+    if (!pipe) {
+        return;
+    }
+
+    std::array<char, 128> buffer{};
+    std::string output;
+    if (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+        output = buffer.data();
+    }
+#ifdef _WIN32
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+
+    int w = 0;
+    int h = 0;
+    if (std::sscanf(output.c_str(), "%d %d", &w, &h) == 2 && w > 0 && h > 0) {
+        outWidth = w;
+        outHeight = h;
+    }
 }
 
 std::optional<std::filesystem::path> openNativeFileDialog() {
@@ -295,6 +347,11 @@ void App::selectFile(const std::filesystem::path& filePath) {
     m_selectedTargetIndex = 0;
     m_dropdownOpen = false;
     m_showSvgWarningModal = false;
+    m_imageWidth = 0;
+    m_imageHeight = 0;
+    if (m_detectedCategory == FileCategory::IMAGE) {
+        detectImageDimensions(m_currentFile, m_imageWidth, m_imageHeight);
+    }
     m_pathScrollOffset = 0.0f;
     m_outputSizeFormatted.clear();
     m_state = AppState::FILE_DETECTED;
@@ -313,6 +370,36 @@ void App::openFileDialogAsync() {
     m_fileDialogTask = std::async(std::launch::async, []() {
         return openNativeFileDialog();
     });
+}
+
+void App::openOutputFolderAsync(const std::filesystem::path& outputPath) {
+    if (outputPath.empty()) {
+        return;
+    }
+
+    std::error_code ec;
+    std::filesystem::path normPath = std::filesystem::weakly_canonical(outputPath, ec);
+    if (ec) {
+        normPath = std::filesystem::absolute(outputPath, ec);
+        if (ec) {
+            normPath = outputPath;
+        }
+    }
+    normPath.make_preferred();
+
+#if defined(_WIN32)
+    const std::string cmd = "explorer.exe /select,\"" + normPath.string() + "\"";
+#else
+    std::filesystem::path folderPath = normPath.parent_path();
+    if (folderPath.empty()) {
+        folderPath = ".";
+    }
+    const std::string cmd = "xdg-open \"" + folderPath.string() + "\" >/dev/null 2>&1";
+#endif
+
+    std::thread([cmd]() {
+        std::system(cmd.c_str());
+    }).detach();
 }
 
 void App::handleDroppedFiles() {
@@ -444,14 +531,10 @@ void App::render() {
 
     switch (m_state) {
         case AppState::WAITING_DROP: {
-            drawCenteredText("Glissez un fichier ici (Image, Audio, Vidéo, Document...)", 92.0f, 19.5f, {51, 65, 85, 255});
-            drawCenteredText("Images : PNG, JPG, WEBP, SVG, HEIC, TIFF, ICO, RAW, GIF", 132.0f, 14.0f, {100, 116, 139, 255});
-            drawCenteredText("Audio : MP3, WAV, FLAC, OGG, AAC, M4A", 152.0f, 14.0f, {100, 116, 139, 255});
-            drawCenteredText("Vidéo : MP4, MKV, AVI, MOV, WEBM", 172.0f, 14.0f, {100, 116, 139, 255});
-            drawCenteredText("Documents : DOCX, ODT, MD, HTML, TXT", 192.0f, 14.0f, {100, 116, 139, 255});
-            drawCenteredText("- ou -", 220.0f, 16.0f, {148, 163, 184, 255});
+            drawCenteredText("Glisser un fichier ici", 138.0f, 24.0f, {51, 65, 85, 255});
+            drawCenteredText("- ou -", 188.0f, 16.0f, {148, 163, 184, 255});
 
-            const Rectangle importBtn{210.0f, 250.0f, 180.0f, 44.0f};
+            const Rectangle importBtn{210.0f, 224.0f, 180.0f, 44.0f};
             const std::string importLabel = m_fileDialogOpen ? "Ouverture..." : "Importer";
             const Color baseCol = m_fileDialogOpen ? Color{148, 163, 184, 255} : Color{37, 99, 235, 255};
             if (drawButton(importBtn, importLabel, baseCol, {29, 78, 216, 255}, RAYWHITE, !m_fileDialogOpen)) {
@@ -687,7 +770,7 @@ void App::render() {
                     !m_availableTargets.empty() &&
                     m_selectedTargetIndex < m_availableTargets.size() &&
                     m_availableTargets[m_selectedTargetIndex] == FileType::SVG) {
-                    engineSub = "Vectorisation asynchrone via ImageMagick & Potrace";
+                    engineSub = "Vectorisation couleur asynchrone via VTracer";
                 } else if (m_detectedCategory == FileCategory::AUDIO) {
                     engineSub = "Traitement asynchrone via FFmpeg";
                 } else if (m_detectedCategory == FileCategory::DOCUMENT) {
@@ -789,7 +872,7 @@ void App::render() {
                     !m_availableTargets.empty() &&
                     m_selectedTargetIndex < m_availableTargets.size() &&
                     m_availableTargets[m_selectedTargetIndex] == FileType::SVG) {
-                    missingMsg = "Veuillez installer Potrace ('potrace') et ImageMagick ('magick').";
+                    missingMsg = "Veuillez installer VTracer ('vtracer') ou le placer dans bin/vtracer/.";
                 } else if (m_detectedCategory == FileCategory::AUDIO || m_detectedCategory == FileCategory::VIDEO) {
                     missingMsg = "Veuillez installer FFmpeg ('ffmpeg') ou le placer dans bin/ffmpeg/.";
                 } else if (m_detectedCategory == FileCategory::DOCUMENT) {
@@ -801,11 +884,32 @@ void App::render() {
                 drawCenteredText("La commande CLI externe a échoué.", 152.0f, 16.0f, {100, 116, 139, 255});
             }
 
-            drawCenteredText("Glissez un autre fichier ou cliquez ci-dessous :", 212.0f, 16.0f, {100, 116, 139, 255});
+            drawCenteredText("Glissez un autre fichier ou choisissez une action :", 214.0f, 16.0f, {100, 116, 139, 255});
 
-            const Rectangle newFileBtn{200.0f, 248.0f, 200.0f, 44.0f};
-            if (drawButton(newFileBtn, "Nouveau fichier", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE)) {
-                resetState();
+            if (status == ConversionStatus::SUCCESS && !m_converter.getLastOutputPath().empty()) {
+                const Rectangle openFolderBtn{58.0f, 252.0f, 156.0f, 42.0f};
+                const Rectangle reconvertBtn{226.0f, 252.0f, 148.0f, 42.0f};
+                const Rectangle newFileBtn{386.0f, 252.0f, 156.0f, 42.0f};
+
+                if (drawButton(openFolderBtn, "Ouvrir le dossier", {22, 163, 74, 255}, {21, 128, 61, 255}, RAYWHITE)) {
+                    openOutputFolderAsync(m_converter.getLastOutputPath());
+                }
+                if (drawButton(reconvertBtn, "Autre format", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE)) {
+                    returnToFormatSelection();
+                }
+                if (drawButton(newFileBtn, "Nouveau fichier", {71, 85, 105, 255}, {51, 65, 85, 255}, RAYWHITE)) {
+                    resetState();
+                }
+            } else {
+                const Rectangle reconvertBtn{115.0f, 252.0f, 175.0f, 42.0f};
+                const Rectangle newFileBtn{310.0f, 252.0f, 175.0f, 42.0f};
+
+                if (drawButton(reconvertBtn, "Autre format", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE)) {
+                    returnToFormatSelection();
+                }
+                if (drawButton(newFileBtn, "Nouveau fichier", {71, 85, 105, 255}, {51, 65, 85, 255}, RAYWHITE)) {
+                    resetState();
+                }
             }
             break;
         }
@@ -813,22 +917,59 @@ void App::render() {
 
     // Modale d'avertissement avant vectorisation matricielle -> SVG
     if (m_showSvgWarningModal) {
-        DrawRectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, Fade(BLACK, 0.6f));
+        DrawRectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, Fade(BLACK, 0.65f));
 
-        const Rectangle modalBox{45.0f, 65.0f, 510.0f, 270.0f};
+        const bool isLowRes = (m_imageWidth > 0 && m_imageHeight > 0 &&
+                               (m_imageWidth < 256 || m_imageHeight < 256));
+        const Rectangle modalBox = isLowRes
+            ? Rectangle{35.0f, 26.0f, 530.0f, 348.0f}
+            : Rectangle{45.0f, 68.0f, 510.0f, 264.0f};
+
         DrawRectangleRounded(modalBox, 0.06f, 8, {30, 41, 59, 255});
         DrawRectangleRoundedLinesEx(modalBox, 0.06f, 8, 2.0f, RAYWHITE);
 
-        drawCenteredText("Attention : Vectorisation (-> SVG)", 84.0f, 20.0f, {251, 191, 36, 255});
+        const float baseY = modalBox.y + 18.0f;
+        drawCenteredText("Attention : Vectorisation (-> SVG)", baseY, 20.0f, {251, 191, 36, 255});
 
-        drawCenteredText("Vous allez convertir une image matricielle en tracé vectoriel.", 122.0f, 15.0f, RAYWHITE);
-        drawCenteredText("Recommandé pour : logos simples, icônes, croquis,", 152.0f, 14.5f, {134, 239, 172, 255});
-        drawCenteredText("textes monochromes.", 170.0f, 14.5f, {134, 239, 172, 255});
-        drawCenteredText("Déconseillé pour : photos réalistes, visages, paysages,", 198.0f, 14.5f, {252, 165, 165, 255});
-        drawCenteredText("dégradés complexes (risque de fichier lourd et perte de détails).", 216.0f, 14.5f, {252, 165, 165, 255});
+        drawCenteredText("Vous allez convertir une image matricielle en tracé vectoriel.", baseY + 34.0f, 15.0f, RAYWHITE);
+        drawCenteredText("Recommandé pour : logos, icônes, croquis, illustrations", baseY + 60.0f, 14.5f, {134, 239, 172, 255});
+        drawCenteredText("et formes nettes (couleurs préservées via VTracer).", baseY + 78.0f, 14.5f, {134, 239, 172, 255});
+        drawCenteredText("Déconseillé pour : photos réalistes, visages, paysages,", baseY + 104.0f, 14.5f, {252, 165, 165, 255});
+        drawCenteredText("dégradés complexes (risque de fichier lourd et perte de détails).", baseY + 122.0f, 14.5f, {252, 165, 165, 255});
 
-        const Rectangle cancelModalBtn{125.0f, 268.0f, 160.0f, 42.0f};
-        const Rectangle continueModalBtn{315.0f, 268.0f, 160.0f, 42.0f};
+        // Uniquement si largeur < 256 OU hauteur < 256 : encart d'alerte rouge/orange percutant
+        if (isLowRes) {
+            const Rectangle alertBox{55.0f, baseY + 150.0f, 490.0f, 86.0f};
+            DrawRectangleRounded(alertBox, 0.14f, 8, {69, 20, 20, 245});
+            DrawRectangleRoundedLinesEx(alertBox, 0.14f, 8, 2.0f, {249, 115, 22, 255});
+
+            drawCenteredText(
+                "ATTENTION : IMAGE TRÈS PETITE",
+                alertBox.y + 10.0f,
+                16.5f,
+                {251, 146, 60, 255}
+            );
+
+            const std::string resLine =
+                "Résolution détectée : " + std::to_string(m_imageWidth) + "x" + std::to_string(m_imageHeight) + " px";
+            drawCenteredText(
+                resLine,
+                alertBox.y + 34.0f,
+                15.0f,
+                RAYWHITE
+            );
+
+            drawCenteredText(
+                "Le tracé SVG sera déformé ou illisible (minimum conseillé : 512x512 px).",
+                alertBox.y + 58.0f,
+                13.5f,
+                {254, 215, 170, 255}
+            );
+        }
+
+        const float btnY = modalBox.y + modalBox.height - 54.0f;
+        const Rectangle cancelModalBtn{125.0f, btnY, 160.0f, 40.0f};
+        const Rectangle continueModalBtn{315.0f, btnY, 160.0f, 40.0f};
 
         if (drawButton(cancelModalBtn, "Annuler", {71, 85, 105, 255}, {100, 116, 139, 255}, RAYWHITE)) {
             m_showSvgWarningModal = false;
@@ -843,6 +984,15 @@ void App::render() {
     }
 }
 
+void App::returnToFormatSelection() {
+    m_converter.reset();
+    m_dropdownOpen = false;
+    m_showSvgWarningModal = false;
+    m_pathScrollOffset = 0.0f;
+    m_outputSizeFormatted.clear();
+    m_state = AppState::FILE_DETECTED;
+}
+
 void App::resetState() {
     m_converter.reset();
     m_currentFile.clear();
@@ -852,6 +1002,8 @@ void App::resetState() {
     m_selectedTargetIndex = 0;
     m_dropdownOpen = false;
     m_showSvgWarningModal = false;
+    m_imageWidth = 0;
+    m_imageHeight = 0;
     m_pathScrollOffset = 0.0f;
     m_outputSizeFormatted.clear();
     m_state = AppState::WAITING_DROP;

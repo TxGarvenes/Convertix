@@ -38,6 +38,8 @@ private:
     std::size_t m_selectedTargetIndex{0};
     bool m_dropdownOpen{false};
     bool m_showSvgWarningModal{false};
+    int m_imageWidth{0};
+    int m_imageHeight{0};
 
     float m_pathScrollOffset{0.0f};
     std::string m_outputSizeFormatted;
@@ -61,10 +63,12 @@ private:
 
     void selectFile(const std::filesystem::path& filePath);
     void openFileDialogAsync();
+    static void openOutputFolderAsync(const std::filesystem::path& outputPath);
     void handleDroppedFiles();
     void update();
     void render();
     void resetState();
+    void returnToFormatSelection();
 
     void drawCenteredText(const std::string& text, float y, float fontSize, Color color) const;
     bool drawButton(Rectangle bounds, const std::string& label, Color baseColor, Color hoverColor, Color textColor, bool enabled = true) const;

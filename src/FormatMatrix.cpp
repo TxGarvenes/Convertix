@@ -40,9 +40,9 @@ std::vector<FileType> FormatMatrix::getAvailableTargets(FileType sourceType) {
         case FileType::GIF:
             return {FileType::WEBP, FileType::PNG};
 
-        // Icône ICO -> PNG, JPEG, WEBP, BMP
+        // Icône ICO -> PNG, JPEG, WEBP, BMP, SVG
         case FileType::ICO:
-            return {FileType::PNG, FileType::JPEG, FileType::WEBP, FileType::BMP};
+            return {FileType::PNG, FileType::JPEG, FileType::WEBP, FileType::BMP, FileType::SVG};
 
         // Audio -> MP3, WAV, FLAC, OGG, AAC (moins le format source, jamais de cible vidéo)
         case FileType::MP3:
