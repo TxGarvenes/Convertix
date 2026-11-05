@@ -33,12 +33,12 @@ private:
     AppState m_state{AppState::WAITING_DROP};
     std::filesystem::path m_currentFile;
     FileType m_detectedType{FileType::UNKNOWN};
+    FileCategory m_detectedCategory{FileCategory::UNKNOWN};
     std::vector<FileType> m_availableTargets;
     std::size_t m_selectedTargetIndex{0};
     bool m_dropdownOpen{false};
 
     Converter m_converter;
-    bool m_magickAvailable{false};
 
     std::future<std::optional<std::filesystem::path>> m_fileDialogTask;
     bool m_fileDialogOpen{false};

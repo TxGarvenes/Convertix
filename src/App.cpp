@@ -108,20 +108,22 @@ std::optional<std::filesystem::path> openNativeFileDialog() {
         "powershell -NoProfile -Command \""
         "Add-Type -AssemblyName System.Windows.Forms; "
         "$f = New-Object System.Windows.Forms.OpenFileDialog; "
-        "$f.Title = 'Selectionner une image'; "
-        "$f.Filter = 'Images (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.dng;*.cr2;*.nef;*.arw)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.dng;*.cr2;*.nef;*.arw|Tous les fichiers (*.*)|*.*'; "
+        "$f.Title = 'Selectionner un fichier media'; "
+        "$f.Filter = 'Medias supportes (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.svg;*.dng;*.cr2;*.nef;*.arw;*.mp3;*.wav;*.flac;*.ogg;*.aac;*.m4a)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.svg;*.dng;*.cr2;*.nef;*.arw;*.mp3;*.wav;*.flac;*.ogg;*.aac;*.m4a|Tous les fichiers (*.*)|*.*'; "
         "if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }\"";
     FILE* pipe = _popen(cmd, "r");
 #else
     const char* cmd =
         "if command -v zenity >/dev/null 2>&1; then "
-        "zenity --file-selection --title=\"Sélectionner une image\" "
-        "--file-filter=\"Images | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.heif *.HEIF *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW\" "
+        "zenity --file-selection --title=\"Sélectionner un fichier\" "
+        "--file-filter=\"Médias (Images & Audio) | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.heif *.HEIF *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.svg *.SVG *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.ogg *.OGG *.aac *.AAC *.m4a *.M4A\" "
+        "--file-filter=\"Images | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.svg *.SVG *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW\" "
+        "--file-filter=\"Audio | *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.ogg *.OGG *.aac *.AAC *.m4a *.M4A\" "
         "--file-filter=\"Tous les fichiers | *\" 2>/dev/null; "
         "elif command -v kdialog >/dev/null 2>&1; then "
-        "kdialog --getopenfilename . \"*.png *.jpg *.jpeg *.webp *.bmp *.gif *.heic *.tiff *.tif *.ico *.dng *.cr2 *.nef *.arw|Images\" 2>/dev/null; "
+        "kdialog --getopenfilename . \"*.png *.jpg *.jpeg *.webp *.bmp *.gif *.heic *.tiff *.tif *.ico *.svg *.dng *.cr2 *.nef *.arw *.mp3 *.wav *.flac *.ogg *.aac *.m4a|Médias\" 2>/dev/null; "
         "elif command -v yad >/dev/null 2>&1; then "
-        "yad --file --title=\"Sélectionner une image\" 2>/dev/null; "
+        "yad --file --title=\"Sélectionner un fichier\" 2>/dev/null; "
         "fi";
     FILE* pipe = popen(cmd, "r");
 #endif
@@ -154,8 +156,7 @@ std::optional<std::filesystem::path> openNativeFileDialog() {
 
 } // namespace
 
-App::App()
-    : m_magickAvailable(m_converter.isMagickAvailable()) {}
+App::App() = default;
 
 App::~App() {
     if (m_fileDialogTask.valid()) {
@@ -231,7 +232,6 @@ void App::loadAppLogo() {
         return;
     }
 
-    // Chargement avec hauteur 2x plus petite (12px) en conservant le ratio du logo
     Image logoImage = loadSvgImage(*logoPath, 0, 12);
     if (IsImageValid(logoImage)) {
         m_logoTexture = LoadTextureFromImage(logoImage);
@@ -252,7 +252,7 @@ void App::unloadAppLogo() {
 }
 
 void App::run() {
-    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Convertix - Convertisseur d'Images");
+    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Convertix - Convertisseur de Fichiers");
     SetTargetFPS(60);
 
     loadAppIcon();
@@ -276,6 +276,7 @@ void App::selectFile(const std::filesystem::path& filePath) {
     m_converter.reset();
     m_currentFile = filePath;
     m_detectedType = FileDetector::detect(m_currentFile);
+    m_detectedCategory = FileDetector::getCategory(m_detectedType);
     m_availableTargets = FormatMatrix::getAvailableTargets(m_detectedType);
     m_selectedTargetIndex = 0;
     m_dropdownOpen = false;
@@ -324,7 +325,9 @@ void App::update() {
 
     if (m_state == AppState::CONVERTING) {
         const ConversionStatus status = m_converter.getStatus();
-        if (status == ConversionStatus::SUCCESS || status == ConversionStatus::ERROR_CLI) {
+        if (status == ConversionStatus::SUCCESS ||
+            status == ConversionStatus::ERROR_CLI ||
+            status == ConversionStatus::MISSING_TOOL) {
             m_state = AppState::FINISHED;
         }
     }
@@ -387,11 +390,6 @@ std::string App::fitTextToWidth(const std::string& text, float fontSize, float m
 void App::render() {
     ClearBackground({245, 247, 250, 255});
 
-    if (!m_magickAvailable) {
-        DrawRectangle(0, 0, WINDOW_WIDTH, 26, {254, 226, 226, 255});
-        drawCenteredText("Attention : ImageMagick ('magick') introuvable dans le PATH", 5.0f, 15.0f, MAROON);
-    }
-
     // Logo discret en haut à gauche de la fenêtre (12px de haut)
     if (m_logoLoaded) {
         DrawTexture(m_logoTexture, 36, 12, WHITE);
@@ -404,11 +402,12 @@ void App::render() {
 
     switch (m_state) {
         case AppState::WAITING_DROP: {
-            drawCenteredText("Glissez et déposez une image ici", 118.0f, 22.0f, {51, 65, 85, 255});
-            drawCenteredText("PNG, JPEG, WEBP, HEIC, TIFF, ICO, RAW, BMP, GIF", 156.0f, 15.0f, {100, 116, 139, 255});
-            drawCenteredText("- ou -", 196.0f, 16.0f, {148, 163, 184, 255});
+            drawCenteredText("Glissez et déposez un fichier ici", 112.0f, 22.0f, {51, 65, 85, 255});
+            drawCenteredText("Images : PNG, JPG, WEBP, SVG, HEIC, TIFF, ICO, RAW, GIF", 148.0f, 15.0f, {100, 116, 139, 255});
+            drawCenteredText("Audio : MP3, WAV, FLAC, OGG, AAC, M4A", 170.0f, 15.0f, {100, 116, 139, 255});
+            drawCenteredText("- ou -", 204.0f, 16.0f, {148, 163, 184, 255});
 
-            const Rectangle importBtn{210.0f, 232.0f, 180.0f, 44.0f};
+            const Rectangle importBtn{210.0f, 236.0f, 180.0f, 44.0f};
             const std::string importLabel = m_fileDialogOpen ? "Ouverture..." : "Importer";
             const Color baseCol = m_fileDialogOpen ? Color{148, 163, 184, 255} : Color{37, 99, 235, 255};
             if (drawButton(importBtn, importLabel, baseCol, {29, 78, 216, 255}, RAYWHITE, !m_fileDialogOpen)) {
@@ -420,9 +419,9 @@ void App::render() {
         case AppState::FILE_DETECTED: {
             const std::string rawFileName = m_currentFile.filename().string();
             const std::string displayFileName = fitTextToWidth("Fichier : " + rawFileName, 20.0f, dropZone.width - 40.0f, false);
-            drawCenteredText(displayFileName, 64.0f, 20.0f, {30, 41, 59, 255});
+            drawCenteredText(displayFileName, 60.0f, 20.0f, {30, 41, 59, 255});
 
-            if (m_detectedType == FileType::UNKNOWN) {
+            if (m_detectedType == FileType::UNKNOWN || m_availableTargets.empty()) {
                 drawCenteredText("Format non supporté", 130.0f, 22.0f, {220, 38, 38, 255});
                 drawCenteredText("Signature binaire (Magic Bytes) non reconnue.", 165.0f, 16.0f, {100, 116, 139, 255});
 
@@ -431,17 +430,19 @@ void App::render() {
                     resetState();
                 }
             } else {
-                const std::string detectedStr = "Format réel détecté : " + FileDetector::toString(m_detectedType);
-                drawCenteredText(detectedStr, 98.0f, 18.0f, {22, 163, 74, 255});
-                drawCenteredText("Sélectionnez le format cible :", 134.0f, 16.0f, {100, 116, 139, 255});
+                const std::string detectedStr =
+                    "Catégorie : " + FileDetector::categoryToString(m_detectedCategory) +
+                    "  |  Format réel : " + FileDetector::toString(m_detectedType);
+                drawCenteredText(detectedStr, 94.0f, 18.0f, {22, 163, 74, 255});
+                drawCenteredText("Sélectionnez le format cible :", 128.0f, 16.0f, {100, 116, 139, 255});
 
-                const Rectangle dropdownBox{125.0f, 166.0f, 185.0f, 40.0f};
-                const Rectangle convertBtn{325.0f, 166.0f, 150.0f, 40.0f};
-                const Rectangle cancelBtn{220.0f, 286.0f, 160.0f, 36.0f};
+                const Rectangle dropdownBox{125.0f, 158.0f, 185.0f, 40.0f};
+                const Rectangle convertBtn{325.0f, 158.0f, 150.0f, 40.0f};
+                const Rectangle cancelBtn{220.0f, 294.0f, 160.0f, 36.0f};
 
                 if (drawButton(convertBtn, "Convertir", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE, !m_dropdownOpen)) {
                     if (!m_availableTargets.empty() && m_selectedTargetIndex < m_availableTargets.size()) {
-                        m_converter.startConversion(m_currentFile, m_availableTargets[m_selectedTargetIndex]);
+                        m_converter.startConversion(m_currentFile, m_detectedType, m_availableTargets[m_selectedTargetIndex]);
                         m_dropdownOpen = false;
                         m_state = AppState::CONVERTING;
                         break;
@@ -495,7 +496,7 @@ void App::render() {
 
                 bool clickedInsideDropdown = false;
                 if (m_dropdownOpen && !m_availableTargets.empty()) {
-                    const float itemHeight = 32.0f;
+                    const float itemHeight = 28.0f;
                     const float listHeight = static_cast<float>(m_availableTargets.size()) * itemHeight;
                     const Rectangle listBounds{dropdownBox.x, dropdownBox.y + dropdownBox.height + 3.0f, dropdownBox.width, listHeight};
 
@@ -558,18 +559,22 @@ void App::render() {
             DrawRing({static_cast<float>(WINDOW_WIDTH) / 2.0f, 155.0f}, 18.0f, 24.0f, startAngle, startAngle + 270.0f, 32, {37, 99, 235, 255});
 
             drawCenteredText("Conversion en cours...", 205.0f, 22.0f, {30, 41, 59, 255});
-            drawCenteredText("Traitement asynchrone via ImageMagick", 238.0f, 16.0f, {100, 116, 139, 255});
+            const std::string engineSub = (m_detectedCategory == FileCategory::AUDIO || m_detectedCategory == FileCategory::VIDEO)
+                ? "Traitement asynchrone via FFmpeg"
+                : "Traitement asynchrone via ImageMagick";
+            drawCenteredText(engineSub, 238.0f, 16.0f, {100, 116, 139, 255});
             break;
         }
 
         case AppState::FINISHED: {
-            if (m_converter.getStatus() == ConversionStatus::SUCCESS) {
+            const ConversionStatus status = m_converter.getStatus();
+            if (status == ConversionStatus::SUCCESS) {
                 const std::filesystem::path outPath = m_converter.getLastOutputPath();
                 std::error_code ec;
                 const std::filesystem::path absPath = std::filesystem::weakly_canonical(outPath, ec);
                 const std::string rawPathStr = ec ? outPath.string() : absPath.string();
 
-                drawCenteredText("Conversion terminée avec succès !", 85.0f, 22.0f, {22, 163, 74, 255});
+                drawCenteredText("Conversion réussie !", 85.0f, 22.0f, {22, 163, 74, 255});
                 drawCenteredText("Fichier généré :", 122.0f, 16.0f, {100, 116, 139, 255});
 
                 const Rectangle pathBox{64.0f, 150.0f, static_cast<float>(WINDOW_WIDTH - 128), 38.0f};
@@ -587,9 +592,15 @@ void App::render() {
                     TEXT_SPACING,
                     {30, 41, 59, 255}
                 );
+            } else if (status == ConversionStatus::MISSING_TOOL) {
+                drawCenteredText("Outil CLI manquant", 115.0f, 22.0f, {220, 38, 38, 255});
+                const std::string missingMsg = (m_detectedCategory == FileCategory::AUDIO || m_detectedCategory == FileCategory::VIDEO)
+                    ? "Veuillez installer FFmpeg ('ffmpeg') dans le PATH."
+                    : "Veuillez installer ImageMagick ('magick') dans le PATH.";
+                drawCenteredText(missingMsg, 152.0f, 16.0f, {100, 116, 139, 255});
             } else {
                 drawCenteredText("Erreur lors de la conversion", 115.0f, 22.0f, {220, 38, 38, 255});
-                drawCenteredText("Vérifiez qu'ImageMagick ('magick') est installé.", 152.0f, 16.0f, {100, 116, 139, 255});
+                drawCenteredText("La commande CLI externe a échoué.", 152.0f, 16.0f, {100, 116, 139, 255});
             }
 
             drawCenteredText("Glissez un autre fichier ou cliquez ci-dessous :", 212.0f, 16.0f, {100, 116, 139, 255});
@@ -607,6 +618,7 @@ void App::resetState() {
     m_converter.reset();
     m_currentFile.clear();
     m_detectedType = FileType::UNKNOWN;
+    m_detectedCategory = FileCategory::UNKNOWN;
     m_availableTargets.clear();
     m_selectedTargetIndex = 0;
     m_dropdownOpen = false;
