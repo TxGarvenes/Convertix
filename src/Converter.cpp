@@ -7,7 +7,48 @@
 #include <sstream>
 #include <string>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace {
+
+std::filesystem::path g_appBasePath;
+
+std::filesystem::path detectExecutableBasePath(const char* argv0) {
+    std::error_code ec;
+#if defined(_WIN32)
+    std::array<wchar_t, MAX_PATH> buffer{};
+    const DWORD len = GetModuleFileNameW(NULL, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (len > 0 && len < buffer.size()) {
+        const std::filesystem::path exePath(buffer.data());
+        const auto canonPath = std::filesystem::weakly_canonical(exePath, ec);
+        return (ec ? exePath : canonPath).parent_path();
+    }
+#else
+    const std::filesystem::path procExe = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec && !procExe.empty()) {
+        const auto canonPath = std::filesystem::weakly_canonical(procExe, ec);
+        return (ec ? procExe : canonPath).parent_path();
+    }
+#endif
+
+    if (argv0 != nullptr && argv0[0] != '\0') {
+        const std::filesystem::path fallbackPath = std::filesystem::absolute(std::filesystem::path(argv0), ec);
+        if (!ec && !fallbackPath.empty()) {
+            const auto canonFallback = std::filesystem::weakly_canonical(fallbackPath, ec);
+            return (ec ? fallbackPath : canonFallback).parent_path();
+        }
+    }
+
+    return std::filesystem::current_path(ec);
+}
 
 std::string getToolSubdir(const std::string& toolName) {
     if (toolName == "magick") {
@@ -50,6 +91,39 @@ double parseHMS(const std::string& hms) {
     return 0.0;
 }
 
+// Sélectionne la couche de plus haute résolution dans un fichier .ico (fallback sur [-1])
+std::string resolveBestIcoInputSpec(const std::filesystem::path& icoPath, const std::string& magickCmd) {
+    const std::string identifyCmd =
+        magickCmd + " identify -ping -format \"%s %w %h\\n\" \"" + icoPath.string() + "\" 2>&1";
+
+    FILE* pipe = openProcessPipe(identifyCmd);
+    int bestScene = -1;
+    long long bestArea = -1;
+
+    if (pipe) {
+        std::array<char, 256> buffer{};
+        while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+            int scene = -1;
+            int w = 0;
+            int h = 0;
+            if (std::sscanf(buffer.data(), "%d %d %d", &scene, &w, &h) == 3 && scene >= 0 && w > 0 && h > 0) {
+                const long long area = static_cast<long long>(w) * static_cast<long long>(h);
+                if (area >= bestArea) {
+                    bestArea = area;
+                    bestScene = scene;
+                }
+            }
+        }
+        closeProcessPipe(pipe);
+    }
+
+    if (bestScene >= 0) {
+        return icoPath.string() + "[" + std::to_string(bestScene) + "]";
+    }
+
+    return icoPath.string() + "[-1]";
+}
+
 } // namespace
 
 Converter::Converter() {
@@ -62,32 +136,33 @@ Converter::~Converter() {
     }
 }
 
+void Converter::initBasePath(const char* argv0) {
+    g_appBasePath = detectExecutableBasePath(argv0);
+}
+
+const std::filesystem::path& Converter::getBasePath() {
+    if (g_appBasePath.empty()) {
+        g_appBasePath = detectExecutableBasePath(nullptr);
+    }
+    return g_appBasePath;
+}
+
 std::string Converter::resolveToolPath(const std::string& toolName) {
     const std::string subDir = getToolSubdir(toolName);
+    const std::filesystem::path& basePath = getBasePath();
     std::error_code ec;
 
 #if defined(_WIN32)
     const std::string exeFile = toolName + ".exe";
-    const std::array<std::filesystem::path, 4> localCandidates = {
-        std::filesystem::path("bin") / subDir / exeFile,
-        std::filesystem::path("bin") / exeFile,
-        std::filesystem::path("../bin") / subDir / exeFile,
-        std::filesystem::path("../bin") / exeFile
-    };
-
-    for (const auto& candidate : localCandidates) {
-        if (std::filesystem::exists(candidate, ec) && std::filesystem::is_regular_file(candidate, ec)) {
-            const auto absPath = std::filesystem::weakly_canonical(candidate, ec);
-            const std::string resolved = ec ? candidate.string() : absPath.string();
-            return "\"" + resolved + "\"";
-        }
-    }
 #else
+    const std::string exeFile = toolName;
+#endif
+
     const std::array<std::filesystem::path, 4> localCandidates = {
-        std::filesystem::path("bin") / subDir / toolName,
-        std::filesystem::path("bin") / toolName,
-        std::filesystem::path("../bin") / subDir / toolName,
-        std::filesystem::path("../bin") / toolName
+        basePath / "bin" / subDir / exeFile,
+        basePath / "bin" / exeFile,
+        basePath.parent_path() / "bin" / subDir / exeFile,
+        basePath.parent_path() / "bin" / exeFile
     };
 
     for (const auto& candidate : localCandidates) {
@@ -97,7 +172,6 @@ std::string Converter::resolveToolPath(const std::string& toolName) {
             return "\"" + resolved + "\"";
         }
     }
-#endif
 
     return toolName;
 }
@@ -253,7 +327,7 @@ void Converter::startConversion(const std::filesystem::path& input, FileType sou
                 tempPng = std::filesystem::temp_directory_path(ec) / "temp_vtracer_input.png";
                 const std::string magickCmd = resolveToolPath("magick");
                 const std::string inputSpec = (sourceType == FileType::ICO)
-                    ? (input.string() + "[0]")
+                    ? resolveBestIcoInputSpec(input, magickCmd)
                     : input.string();
                 std::string prepCmd = magickCmd + " \"" + inputSpec +
                                       "\" -colorspace sRGB -define png:color-type=6 -alpha on \"" +
@@ -390,7 +464,7 @@ void Converter::startConversion(const std::filesystem::path& input, FileType sou
             }
 
             const std::string inputSpec = (sourceType == FileType::ICO)
-                ? (input.string() + "[0]")
+                ? resolveBestIcoInputSpec(input, magickCmd)
                 : input.string();
 
             std::string postInputOptions;

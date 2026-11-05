@@ -24,6 +24,8 @@ public:
     Converter(const Converter&) = delete;
     Converter& operator=(const Converter&) = delete;
 
+    static void initBasePath(const char* argv0 = nullptr);
+    static const std::filesystem::path& getBasePath();
     static std::string resolveToolPath(const std::string& toolName);
 
     bool checkToolsAvailability();

@@ -58,9 +58,10 @@ std::optional<std::filesystem::path> findFirstTtfInDir(const std::filesystem::pa
 }
 
 std::optional<std::filesystem::path> findAssetFile(const std::string& relativeName) {
+    const std::filesystem::path& basePath = App::getBasePath();
     const std::array<std::filesystem::path, 2> candidates = {
-        std::filesystem::path("assets") / relativeName,
-        std::filesystem::path("../assets") / relativeName
+        basePath / "assets" / relativeName,
+        basePath.parent_path() / "assets" / relativeName
     };
 
     std::error_code ec;
@@ -131,11 +132,11 @@ void detectImageDimensions(const std::filesystem::path& filePath, int& outWidth,
         return;
     }
 
-    // 2. Fallback d'inspection d'en-tête (-ping) via ImageMagick pour WEBP/TIFF/HEIC/ICO
+    // 2. Fallback d'inspection d'en-tête (-ping) via ImageMagick pour WEBP/TIFF/HEIC/ICO (sélectionne la plus haute résolution)
     const std::string magickCmd = Converter::resolveToolPath("magick");
-    std::string cmd = magickCmd + " identify -ping -format \"%w %h\\n\" \"" + filePath.string() + "[0]\" 2>/dev/null";
+    std::string cmd = magickCmd + " identify -ping -format \"%w %h\\n\" \"" + filePath.string() + "\" 2>/dev/null";
 #ifdef _WIN32
-    cmd = magickCmd + " identify -ping -format \"%w %h\\n\" \"" + filePath.string() + "[0]\" 2>NUL";
+    cmd = magickCmd + " identify -ping -format \"%w %h\\n\" \"" + filePath.string() + "\" 2>NUL";
     if (!cmd.empty() && cmd.front() == '"') {
         cmd = "\"" + cmd + "\"";
     }
@@ -148,22 +149,24 @@ void detectImageDimensions(const std::filesystem::path& filePath, int& outWidth,
     }
 
     std::array<char, 128> buffer{};
-    std::string output;
-    if (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
-        output = buffer.data();
+    long long bestArea = -1;
+    while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+        int w = 0;
+        int h = 0;
+        if (std::sscanf(buffer.data(), "%d %d", &w, &h) == 2 && w > 0 && h > 0) {
+            const long long area = static_cast<long long>(w) * static_cast<long long>(h);
+            if (area >= bestArea) {
+                bestArea = area;
+                outWidth = w;
+                outHeight = h;
+            }
+        }
     }
 #ifdef _WIN32
     _pclose(pipe);
 #else
     pclose(pipe);
 #endif
-
-    int w = 0;
-    int h = 0;
-    if (std::sscanf(output.c_str(), "%d %d", &w, &h) == 2 && w > 0 && h > 0) {
-        outWidth = w;
-        outHeight = h;
-    }
 }
 
 std::optional<std::filesystem::path> openNativeFileDialog() {
@@ -230,12 +233,21 @@ App::~App() {
     }
 }
 
+void App::initBasePath(const char* argv0) {
+    Converter::initBasePath(argv0);
+}
+
+const std::filesystem::path& App::getBasePath() {
+    return Converter::getBasePath();
+}
+
 void App::loadAppFont() {
+    const std::filesystem::path& basePath = App::getBasePath();
     const std::array<std::filesystem::path, 4> searchDirs = {
-        "assets/fonts",
-        "assets",
-        "../assets/fonts",
-        "../assets"
+        basePath / "assets" / "fonts",
+        basePath / "assets",
+        basePath.parent_path() / "assets" / "fonts",
+        basePath.parent_path() / "assets"
     };
 
     std::optional<std::filesystem::path> fontPath;

@@ -23,6 +23,9 @@ public:
     App();
     ~App();
 
+    static void initBasePath(const char* argv0 = nullptr);
+    static const std::filesystem::path& getBasePath();
+
     void run();
 
 private:
