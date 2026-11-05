@@ -1,7 +1,7 @@
 node_modules/
 .env
 build/
-bin/*.exe
+bin/
 
 *.o
 *.obj
