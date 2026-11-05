@@ -294,6 +294,7 @@ void App::selectFile(const std::filesystem::path& filePath) {
     m_availableTargets = FormatMatrix::getAvailableTargets(m_detectedType);
     m_selectedTargetIndex = 0;
     m_dropdownOpen = false;
+    m_showSvgWarningModal = false;
     m_pathScrollOffset = 0.0f;
     m_outputSizeFormatted.clear();
     m_state = AppState::FILE_DETECTED;
@@ -320,7 +321,7 @@ void App::handleDroppedFiles() {
     }
 
     FilePathList droppedFiles = LoadDroppedFiles();
-    if (droppedFiles.count > 0 && m_state != AppState::CONVERTING) {
+    if (droppedFiles.count > 0 && m_state != AppState::CONVERTING && !m_showSvgWarningModal) {
         selectFile(std::filesystem::path(droppedFiles.paths[0]));
     }
     UnloadDroppedFiles(droppedFiles);
@@ -483,22 +484,29 @@ void App::render() {
                 const Rectangle convertBtn{330.0f, 142.0f, 155.0f, 36.0f};
                 const Rectangle cancelBtn{220.0f, 308.0f, 160.0f, 36.0f};
 
-                if (drawButton(convertBtn, "Convertir", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE, !m_dropdownOpen)) {
+                const bool bgControlsEnabled = !m_dropdownOpen && !m_showSvgWarningModal;
+
+                if (drawButton(convertBtn, "Convertir", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE, bgControlsEnabled)) {
                     if (!m_availableTargets.empty() && m_selectedTargetIndex < m_availableTargets.size()) {
-                        m_converter.startConversion(m_currentFile, m_detectedType, m_availableTargets[m_selectedTargetIndex]);
+                        const FileType chosenTarget = m_availableTargets[m_selectedTargetIndex];
                         m_dropdownOpen = false;
-                        m_state = AppState::CONVERTING;
+                        if (chosenTarget == FileType::SVG && m_detectedCategory == FileCategory::IMAGE) {
+                            m_showSvgWarningModal = true;
+                        } else {
+                            m_converter.startConversion(m_currentFile, m_detectedType, chosenTarget);
+                            m_state = AppState::CONVERTING;
+                        }
                         break;
                     }
                 }
 
-                if (drawButton(cancelBtn, "Réinitialiser", {203, 213, 225, 255}, {148, 163, 184, 255}, {30, 41, 59, 255}, !m_dropdownOpen)) {
+                if (drawButton(cancelBtn, "Réinitialiser", {203, 213, 225, 255}, {148, 163, 184, 255}, {30, 41, 59, 255}, bgControlsEnabled)) {
                     resetState();
                     break;
                 }
 
                 const Vector2 mousePos = GetMousePosition();
-                const bool headerHovered = CheckCollisionPointRec(mousePos, dropdownBox);
+                const bool headerHovered = !m_showSvgWarningModal && CheckCollisionPointRec(mousePos, dropdownBox);
                 const Color headerBg = headerHovered ? Color{241, 245, 249, 255} : RAYWHITE;
                 const Color borderCol = m_dropdownOpen ? Color{37, 99, 235, 255} : Color{148, 163, 184, 255};
 
@@ -629,7 +637,7 @@ void App::render() {
                     DrawRectangleLinesEx(listBounds, 1.5f, {148, 163, 184, 255});
                 }
 
-                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !clickedInsideDropdown) {
+                if (!m_showSvgWarningModal && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !clickedInsideDropdown) {
                     if (headerHovered) {
                         m_dropdownOpen = !m_dropdownOpen;
                     } else if (m_dropdownOpen) {
@@ -675,7 +683,12 @@ void App::render() {
 
                 drawCenteredText("Conversion en cours...", 205.0f, 22.0f, {30, 41, 59, 255});
                 std::string engineSub = "Traitement asynchrone via ImageMagick";
-                if (m_detectedCategory == FileCategory::AUDIO) {
+                if (m_detectedCategory == FileCategory::IMAGE &&
+                    !m_availableTargets.empty() &&
+                    m_selectedTargetIndex < m_availableTargets.size() &&
+                    m_availableTargets[m_selectedTargetIndex] == FileType::SVG) {
+                    engineSub = "Vectorisation asynchrone via ImageMagick & Potrace";
+                } else if (m_detectedCategory == FileCategory::AUDIO) {
                     engineSub = "Traitement asynchrone via FFmpeg";
                 } else if (m_detectedCategory == FileCategory::DOCUMENT) {
                     engineSub = "Traitement asynchrone via Pandoc";
@@ -772,7 +785,12 @@ void App::render() {
             } else if (status == ConversionStatus::MISSING_TOOL) {
                 drawCenteredText("Outil CLI manquant", 115.0f, 22.0f, {220, 38, 38, 255});
                 std::string missingMsg = "Veuillez installer ImageMagick ('magick') ou le placer dans bin/imagemagick/.";
-                if (m_detectedCategory == FileCategory::AUDIO || m_detectedCategory == FileCategory::VIDEO) {
+                if (m_detectedCategory == FileCategory::IMAGE &&
+                    !m_availableTargets.empty() &&
+                    m_selectedTargetIndex < m_availableTargets.size() &&
+                    m_availableTargets[m_selectedTargetIndex] == FileType::SVG) {
+                    missingMsg = "Veuillez installer Potrace ('potrace') et ImageMagick ('magick').";
+                } else if (m_detectedCategory == FileCategory::AUDIO || m_detectedCategory == FileCategory::VIDEO) {
                     missingMsg = "Veuillez installer FFmpeg ('ffmpeg') ou le placer dans bin/ffmpeg/.";
                 } else if (m_detectedCategory == FileCategory::DOCUMENT) {
                     missingMsg = "Veuillez installer Pandoc ('pandoc') ou le placer dans bin/pandoc/.";
@@ -792,6 +810,37 @@ void App::render() {
             break;
         }
     }
+
+    // Modale d'avertissement avant vectorisation matricielle -> SVG
+    if (m_showSvgWarningModal) {
+        DrawRectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, Fade(BLACK, 0.6f));
+
+        const Rectangle modalBox{45.0f, 65.0f, 510.0f, 270.0f};
+        DrawRectangleRounded(modalBox, 0.06f, 8, {30, 41, 59, 255});
+        DrawRectangleRoundedLinesEx(modalBox, 0.06f, 8, 2.0f, RAYWHITE);
+
+        drawCenteredText("Attention : Vectorisation (-> SVG)", 84.0f, 20.0f, {251, 191, 36, 255});
+
+        drawCenteredText("Vous allez convertir une image matricielle en tracé vectoriel.", 122.0f, 15.0f, RAYWHITE);
+        drawCenteredText("Recommandé pour : logos simples, icônes, croquis,", 152.0f, 14.5f, {134, 239, 172, 255});
+        drawCenteredText("textes monochromes.", 170.0f, 14.5f, {134, 239, 172, 255});
+        drawCenteredText("Déconseillé pour : photos réalistes, visages, paysages,", 198.0f, 14.5f, {252, 165, 165, 255});
+        drawCenteredText("dégradés complexes (risque de fichier lourd et perte de détails).", 216.0f, 14.5f, {252, 165, 165, 255});
+
+        const Rectangle cancelModalBtn{125.0f, 268.0f, 160.0f, 42.0f};
+        const Rectangle continueModalBtn{315.0f, 268.0f, 160.0f, 42.0f};
+
+        if (drawButton(cancelModalBtn, "Annuler", {71, 85, 105, 255}, {100, 116, 139, 255}, RAYWHITE)) {
+            m_showSvgWarningModal = false;
+        }
+        if (drawButton(continueModalBtn, "Continuer", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE)) {
+            m_showSvgWarningModal = false;
+            if (!m_availableTargets.empty() && m_selectedTargetIndex < m_availableTargets.size()) {
+                m_converter.startConversion(m_currentFile, m_detectedType, m_availableTargets[m_selectedTargetIndex]);
+                m_state = AppState::CONVERTING;
+            }
+        }
+    }
 }
 
 void App::resetState() {
@@ -802,6 +851,7 @@ void App::resetState() {
     m_availableTargets.clear();
     m_selectedTargetIndex = 0;
     m_dropdownOpen = false;
+    m_showSvgWarningModal = false;
     m_pathScrollOffset = 0.0f;
     m_outputSizeFormatted.clear();
     m_state = AppState::WAITING_DROP;

@@ -16,14 +16,17 @@ std::vector<FileType> filterOutSource(std::vector<FileType> candidates, FileType
 
 std::vector<FileType> FormatMatrix::getAvailableTargets(FileType sourceType) {
     switch (sourceType) {
-        // Images courantes -> PNG, JPEG, WEBP, BMP, TIFF, ICO, PDF (moins le format source)
+        // Images courantes -> PNG, JPEG, WEBP, BMP, TIFF, SVG, ICO, PDF (moins le format source)
         case FileType::PNG:
         case FileType::JPEG:
         case FileType::WEBP:
         case FileType::BMP:
         case FileType::TIFF:
             return filterOutSource(
-                {FileType::PNG, FileType::JPEG, FileType::WEBP, FileType::BMP, FileType::TIFF, FileType::ICO, FileType::PDF},
+                {
+                    FileType::PNG, FileType::JPEG, FileType::WEBP, FileType::BMP,
+                    FileType::TIFF, FileType::SVG, FileType::ICO, FileType::PDF
+                },
                 sourceType
             );
 

@@ -161,7 +161,8 @@ bool Converter::checkToolsAvailability() {
     m_hasMagick = isToolAvailable("magick");
     m_hasFfmpeg = isToolAvailable("ffmpeg");
     m_hasPandoc = isToolAvailable("pandoc");
-    return m_hasMagick || m_hasFfmpeg || m_hasPandoc;
+    m_hasPotrace = isToolAvailable("potrace");
+    return m_hasMagick || m_hasFfmpeg || m_hasPandoc || m_hasPotrace;
 }
 
 bool Converter::isMagickAvailable() const {
@@ -178,6 +179,10 @@ bool Converter::isFfmpegAvailable() const {
 
 bool Converter::isPandocAvailable() const {
     return m_hasPandoc;
+}
+
+bool Converter::isPotraceAvailable() const {
+    return m_hasPotrace;
 }
 
 void Converter::startConversion(const std::filesystem::path& input, FileType targetType) {
@@ -204,13 +209,16 @@ void Converter::startConversion(const std::filesystem::path& input, FileType sou
     const FileCategory sourceCat = FileDetector::getCategory(sourceType);
     const FileCategory targetCat = FileDetector::getCategory(targetType);
 
-    const bool useFfmpeg = (sourceCat == FileCategory::AUDIO || sourceCat == FileCategory::VIDEO ||
-                            targetCat == FileCategory::AUDIO || targetCat == FileCategory::VIDEO);
-    const bool usePandoc = (!useFfmpeg && sourceCat == FileCategory::DOCUMENT &&
-                            targetCat == FileCategory::DOCUMENT);
-    const bool useMagick = (!useFfmpeg && !usePandoc);
+    const bool usePotraceSvg = (sourceCat == FileCategory::IMAGE && targetType == FileType::SVG);
+    const bool useFfmpeg = (!usePotraceSvg &&
+                            (sourceCat == FileCategory::AUDIO || sourceCat == FileCategory::VIDEO ||
+                             targetCat == FileCategory::AUDIO || targetCat == FileCategory::VIDEO));
+    const bool usePandoc = (!usePotraceSvg && !useFfmpeg &&
+                            sourceCat == FileCategory::DOCUMENT && targetCat == FileCategory::DOCUMENT);
+    const bool useMagick = (!usePotraceSvg && !useFfmpeg && !usePandoc);
 
-    if ((useFfmpeg && !isFFmpegAvailable()) ||
+    if ((usePotraceSvg && (!isMagickAvailable() || !isPotraceAvailable())) ||
+        (useFfmpeg && !isFFmpegAvailable()) ||
         (useMagick && !isMagickAvailable()) ||
         (usePandoc && !isPandocAvailable())) {
         m_status.store(ConversionStatus::MISSING_TOOL);
@@ -227,7 +235,58 @@ void Converter::startConversion(const std::filesystem::path& input, FileType sou
 
     m_status.store(ConversionStatus::IN_PROGRESS);
 
-    m_task = std::async(std::launch::async, [this, input, outputPath, sourceCat, targetCat, targetType, ext, useFfmpeg, usePandoc]() {
+    m_task = std::async(std::launch::async, [this, input, outputPath, sourceCat, targetCat, targetType, ext, usePotraceSvg, useFfmpeg, usePandoc]() {
+#if defined(_WIN32)
+        const std::string silentRedirect = " > NUL 2>&1";
+#else
+        const std::string silentRedirect = " > /dev/null 2>&1";
+#endif
+
+        if (usePotraceSvg) {
+            std::error_code ec;
+            const std::filesystem::path tempBmp =
+                std::filesystem::temp_directory_path(ec) / "temp_potrace.bmp";
+
+            const std::string magickCmd = resolveToolPath("magick");
+            const std::string potraceCmd = resolveToolPath("potrace");
+
+            // Passe 1 (ImageMagick) : Conversion en BMP monochrome avec seuillage à 50%
+            std::string pass1Cmd = magickCmd + " \"" + input.string() +
+                                   "\" -background white -alpha remove -alpha off -colorspace Gray -threshold 50% \"" +
+                                   tempBmp.string() + "\"" + silentRedirect;
+#if defined(_WIN32)
+            if (!pass1Cmd.empty() && pass1Cmd.front() == '"') {
+                pass1Cmd = "\"" + pass1Cmd + "\"";
+            }
+#endif
+            const int res1 = std::system(pass1Cmd.c_str());
+
+            int res2 = -1;
+            if (res1 == 0 && std::filesystem::exists(tempBmp, ec)) {
+                m_progress.store(50.0f);
+                // Passe 2 (Potrace) : Vectorisation du BMP vers SVG (-s)
+                std::string pass2Cmd = potraceCmd + " \"" + tempBmp.string() +
+                                       "\" -s -o \"" + outputPath.string() + "\"" + silentRedirect;
+#if defined(_WIN32)
+                if (!pass2Cmd.empty() && pass2Cmd.front() == '"') {
+                    pass2Cmd = "\"" + pass2Cmd + "\"";
+                }
+#endif
+                res2 = std::system(pass2Cmd.c_str());
+            }
+
+            // Nettoyage systématique du fichier temporaire
+            std::filesystem::remove(tempBmp, ec);
+
+            if (res1 == 0 && res2 == 0 && std::filesystem::exists(outputPath, ec)) {
+                m_progress.store(100.0f);
+                m_status.store(ConversionStatus::SUCCESS);
+            } else {
+                m_status.store(ConversionStatus::ERROR_CLI);
+            }
+            return;
+        }
+
         if (useFfmpeg) {
             double totalDurationSec = probeMediaDurationSeconds(input);
             const std::string ffmpegCmd = resolveToolPath("ffmpeg");
@@ -304,12 +363,6 @@ void Converter::startConversion(const std::filesystem::path& input, FileType sou
             }
             return;
         }
-
-#if defined(_WIN32)
-        const std::string silentRedirect = " > NUL 2>&1";
-#else
-        const std::string silentRedirect = " > /dev/null 2>&1";
-#endif
 
         std::string command;
         if (usePandoc) {

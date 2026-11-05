@@ -37,6 +37,7 @@ private:
     std::vector<FileType> m_availableTargets;
     std::size_t m_selectedTargetIndex{0};
     bool m_dropdownOpen{false};
+    bool m_showSvgWarningModal{false};
 
     float m_pathScrollOffset{0.0f};
     std::string m_outputSizeFormatted;
