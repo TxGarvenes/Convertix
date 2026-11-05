@@ -8,3 +8,7 @@ bin/
 
 .vscode/
 .idea/
+AppDir/
+*.AppImage
+appimagetool*
+squashfs-root/

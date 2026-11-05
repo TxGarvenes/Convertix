@@ -51,3 +51,5 @@ target_link_libraries(convertix PRIVATE
     raylib
     Threads::Threads
 )
+
+set_target_properties(convertix PROPERTIES OUTPUT_NAME "Convertix")
