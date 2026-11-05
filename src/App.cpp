@@ -1,14 +1,24 @@
 #include "App.hpp"
 #include "FormatMatrix.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <iomanip>
+#include <sstream>
 
 namespace {
 
 constexpr float TEXT_SPACING = 1.0f;
+
+struct DropdownRow {
+    bool isSeparator{false};
+    std::string label;
+    std::size_t targetIndex{0};
+};
 
 void drawDashedRect(Rectangle rec, float dashLength, float gapLength, float thickness, Color color) {
     for (float x = rec.x; x < rec.x + rec.width; x += dashLength + gapLength) {
@@ -67,7 +77,6 @@ Image loadSvgImage(const std::filesystem::path& svgPath, int targetWidth, int ta
         "." + svgPath.stem().string() + "_" + std::to_string(targetWidth) + "x" + std::to_string(targetHeight) + ".png";
     const std::filesystem::path cachePng = svgPath.parent_path() / cacheFileName;
 
-    // 1. Chargement instantané depuis le cache PNG si déjà rastérisé et à jour
     if (std::filesystem::exists(cachePng, ec)) {
         const auto svgTime = std::filesystem::last_write_time(svgPath, ec);
         const auto cacheTime = std::filesystem::last_write_time(cachePng, ec);
@@ -79,7 +88,6 @@ Image loadSvgImage(const std::filesystem::path& svgPath, int targetWidth, int ta
         }
     }
 
-    // 2. Sinon, rastérisation unique vers le fichier de cache PNG
     std::string resizeArg;
     if (targetWidth > 0 && targetHeight > 0) {
         resizeArg = " -resize " + std::to_string(targetWidth) + "x" + std::to_string(targetHeight);
@@ -87,11 +95,15 @@ Image loadSvgImage(const std::filesystem::path& svgPath, int targetWidth, int ta
         resizeArg = " -resize x" + std::to_string(targetHeight);
     }
 
+    const std::string magickCmd = Converter::resolveToolPath("magick");
 #ifdef _WIN32
-    const std::string cmd = "magick -background none \"" + svgPath.string() + "\"" +
-                            resizeArg + " PNG32:\"" + cachePng.string() + "\" > NUL 2>&1";
+    std::string cmd = magickCmd + " -background none \"" + svgPath.string() + "\"" +
+                      resizeArg + " PNG32:\"" + cachePng.string() + "\" > NUL 2>&1";
+    if (!cmd.empty() && cmd.front() == '"') {
+        cmd = "\"" + cmd + "\"";
+    }
 #else
-    const std::string cmd = "magick -background none \"" + svgPath.string() + "\"" +
+    const std::string cmd = magickCmd + " -background none \"" + svgPath.string() + "\"" +
                             resizeArg + " PNG32:\"" + cachePng.string() + "\" > /dev/null 2>&1";
 #endif
 
@@ -109,19 +121,20 @@ std::optional<std::filesystem::path> openNativeFileDialog() {
         "Add-Type -AssemblyName System.Windows.Forms; "
         "$f = New-Object System.Windows.Forms.OpenFileDialog; "
         "$f.Title = 'Selectionner un fichier media'; "
-        "$f.Filter = 'Medias supportes (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.svg;*.dng;*.cr2;*.nef;*.arw;*.mp3;*.wav;*.flac;*.ogg;*.aac;*.m4a)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.svg;*.dng;*.cr2;*.nef;*.arw;*.mp3;*.wav;*.flac;*.ogg;*.aac;*.m4a|Tous les fichiers (*.*)|*.*'; "
+        "$f.Filter = 'Medias (Image, Audio, Video)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.svg;*.dng;*.cr2;*.nef;*.arw;*.mp3;*.wav;*.flac;*.ogg;*.aac;*.m4a;*.mp4;*.mkv;*.avi;*.mov;*.webm|Tous les fichiers (*.*)|*.*'; "
         "if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }\"";
     FILE* pipe = _popen(cmd, "r");
 #else
     const char* cmd =
         "if command -v zenity >/dev/null 2>&1; then "
         "zenity --file-selection --title=\"Sélectionner un fichier\" "
-        "--file-filter=\"Médias (Images & Audio) | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.heif *.HEIF *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.svg *.SVG *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.ogg *.OGG *.aac *.AAC *.m4a *.M4A\" "
+        "--file-filter=\"Médias (Image, Audio, Vidéo) | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.heif *.HEIF *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.svg *.SVG *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.ogg *.OGG *.aac *.AAC *.m4a *.M4A *.mp4 *.MP4 *.mkv *.MKV *.avi *.AVI *.mov *.MOV *.webm *.WEBM\" "
         "--file-filter=\"Images | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.svg *.SVG *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW\" "
         "--file-filter=\"Audio | *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.ogg *.OGG *.aac *.AAC *.m4a *.M4A\" "
+        "--file-filter=\"Vidéo | *.mp4 *.MP4 *.mkv *.MKV *.avi *.AVI *.mov *.MOV *.webm *.WEBM\" "
         "--file-filter=\"Tous les fichiers | *\" 2>/dev/null; "
         "elif command -v kdialog >/dev/null 2>&1; then "
-        "kdialog --getopenfilename . \"*.png *.jpg *.jpeg *.webp *.bmp *.gif *.heic *.tiff *.tif *.ico *.svg *.dng *.cr2 *.nef *.arw *.mp3 *.wav *.flac *.ogg *.aac *.m4a|Médias\" 2>/dev/null; "
+        "kdialog --getopenfilename . \"*.png *.jpg *.jpeg *.webp *.bmp *.gif *.heic *.tiff *.tif *.ico *.svg *.dng *.cr2 *.nef *.arw *.mp3 *.wav *.flac *.ogg *.aac *.m4a *.mp4 *.mkv *.avi *.mov *.webm|Médias\" 2>/dev/null; "
         "elif command -v yad >/dev/null 2>&1; then "
         "yad --file --title=\"Sélectionner un fichier\" 2>/dev/null; "
         "fi";
@@ -280,6 +293,8 @@ void App::selectFile(const std::filesystem::path& filePath) {
     m_availableTargets = FormatMatrix::getAvailableTargets(m_detectedType);
     m_selectedTargetIndex = 0;
     m_dropdownOpen = false;
+    m_pathScrollOffset = 0.0f;
+    m_outputSizeFormatted.clear();
     m_state = AppState::FILE_DETECTED;
 }
 
@@ -310,6 +325,27 @@ void App::handleDroppedFiles() {
     UnloadDroppedFiles(droppedFiles);
 }
 
+std::string App::formatFileSize(const std::filesystem::path& filePath) {
+    std::error_code ec;
+    const auto bytes = std::filesystem::file_size(filePath, ec);
+    if (ec) {
+        return "";
+    }
+
+    std::ostringstream oss;
+    constexpr double ONE_KB = 1024.0;
+    constexpr double ONE_MB = 1024.0 * 1024.0;
+
+    if (static_cast<double>(bytes) >= ONE_MB) {
+        const double mb = static_cast<double>(bytes) / ONE_MB;
+        oss << std::fixed << std::setprecision(1) << mb << " Mo";
+    } else {
+        const double kb = std::max(1.0, std::round(static_cast<double>(bytes) / ONE_KB));
+        oss << static_cast<long long>(kb) << " Ko";
+    }
+    return oss.str();
+}
+
 void App::update() {
     handleDroppedFiles();
 
@@ -328,6 +364,10 @@ void App::update() {
         if (status == ConversionStatus::SUCCESS ||
             status == ConversionStatus::ERROR_CLI ||
             status == ConversionStatus::MISSING_TOOL) {
+            if (status == ConversionStatus::SUCCESS) {
+                m_outputSizeFormatted = formatFileSize(m_converter.getLastOutputPath());
+            }
+            m_pathScrollOffset = 0.0f;
             m_state = AppState::FINISHED;
         }
     }
@@ -402,12 +442,13 @@ void App::render() {
 
     switch (m_state) {
         case AppState::WAITING_DROP: {
-            drawCenteredText("Glissez et déposez un fichier ici", 112.0f, 22.0f, {51, 65, 85, 255});
-            drawCenteredText("Images : PNG, JPG, WEBP, SVG, HEIC, TIFF, ICO, RAW, GIF", 148.0f, 15.0f, {100, 116, 139, 255});
-            drawCenteredText("Audio : MP3, WAV, FLAC, OGG, AAC, M4A", 170.0f, 15.0f, {100, 116, 139, 255});
-            drawCenteredText("- ou -", 204.0f, 16.0f, {148, 163, 184, 255});
+            drawCenteredText("Glissez un fichier ici (Image, Audio, Vidéo...)", 102.0f, 21.0f, {51, 65, 85, 255});
+            drawCenteredText("Images : PNG, JPG, WEBP, SVG, HEIC, TIFF, ICO, RAW, GIF", 142.0f, 14.0f, {100, 116, 139, 255});
+            drawCenteredText("Audio : MP3, WAV, FLAC, OGG, AAC, M4A", 164.0f, 14.0f, {100, 116, 139, 255});
+            drawCenteredText("Vidéo : MP4, MKV, AVI, MOV, WEBM", 186.0f, 14.0f, {100, 116, 139, 255});
+            drawCenteredText("- ou -", 216.0f, 16.0f, {148, 163, 184, 255});
 
-            const Rectangle importBtn{210.0f, 236.0f, 180.0f, 44.0f};
+            const Rectangle importBtn{210.0f, 246.0f, 180.0f, 44.0f};
             const std::string importLabel = m_fileDialogOpen ? "Ouverture..." : "Importer";
             const Color baseCol = m_fileDialogOpen ? Color{148, 163, 184, 255} : Color{37, 99, 235, 255};
             if (drawButton(importBtn, importLabel, baseCol, {29, 78, 216, 255}, RAYWHITE, !m_fileDialogOpen)) {
@@ -419,7 +460,7 @@ void App::render() {
         case AppState::FILE_DETECTED: {
             const std::string rawFileName = m_currentFile.filename().string();
             const std::string displayFileName = fitTextToWidth("Fichier : " + rawFileName, 20.0f, dropZone.width - 40.0f, false);
-            drawCenteredText(displayFileName, 60.0f, 20.0f, {30, 41, 59, 255});
+            drawCenteredText(displayFileName, 52.0f, 20.0f, {30, 41, 59, 255});
 
             if (m_detectedType == FileType::UNKNOWN || m_availableTargets.empty()) {
                 drawCenteredText("Format non supporté", 130.0f, 22.0f, {220, 38, 38, 255});
@@ -432,13 +473,13 @@ void App::render() {
             } else {
                 const std::string detectedStr =
                     "Catégorie : " + FileDetector::categoryToString(m_detectedCategory) +
-                    "  |  Format réel : " + FileDetector::toString(m_detectedType);
-                drawCenteredText(detectedStr, 94.0f, 18.0f, {22, 163, 74, 255});
-                drawCenteredText("Sélectionnez le format cible :", 128.0f, 16.0f, {100, 116, 139, 255});
+                    "  |  Format détecté : " + FileDetector::toString(m_detectedType);
+                drawCenteredText(detectedStr, 84.0f, 18.0f, {22, 163, 74, 255});
+                drawCenteredText("Sélectionnez le format cible :", 114.0f, 16.0f, {100, 116, 139, 255});
 
-                const Rectangle dropdownBox{125.0f, 158.0f, 185.0f, 40.0f};
-                const Rectangle convertBtn{325.0f, 158.0f, 150.0f, 40.0f};
-                const Rectangle cancelBtn{220.0f, 294.0f, 160.0f, 36.0f};
+                const Rectangle dropdownBox{115.0f, 142.0f, 200.0f, 36.0f};
+                const Rectangle convertBtn{330.0f, 142.0f, 155.0f, 36.0f};
+                const Rectangle cancelBtn{220.0f, 308.0f, 160.0f, 36.0f};
 
                 if (drawButton(convertBtn, "Convertir", {37, 99, 235, 255}, {29, 78, 216, 255}, RAYWHITE, !m_dropdownOpen)) {
                     if (!m_availableTargets.empty() && m_selectedTargetIndex < m_availableTargets.size()) {
@@ -465,7 +506,7 @@ void App::render() {
                 const std::string selectedLabel = m_availableTargets.empty()
                     ? "-"
                     : FileDetector::toString(m_availableTargets[m_selectedTargetIndex]);
-                const float itemFontSize = 18.0f;
+                const float itemFontSize = 16.0f;
                 const Vector2 selTextSize = MeasureTextEx(m_font, selectedLabel.c_str(), itemFontSize, TEXT_SPACING);
                 DrawTextEx(
                     m_font,
@@ -496,47 +537,91 @@ void App::render() {
 
                 bool clickedInsideDropdown = false;
                 if (m_dropdownOpen && !m_availableTargets.empty()) {
-                    const float itemHeight = 28.0f;
-                    const float listHeight = static_cast<float>(m_availableTargets.size()) * itemHeight;
+                    // Construction des lignes d'affichage avec séparateurs visuels si la source est une Vidéo
+                    std::vector<DropdownRow> rows;
+                    if (m_detectedCategory == FileCategory::VIDEO) {
+                        bool addedVideoHeader = false;
+                        bool addedAudioHeader = false;
+                        for (std::size_t i = 0; i < m_availableTargets.size(); ++i) {
+                            const FileCategory targetCat = FileDetector::getCategory(m_availableTargets[i]);
+                            if (targetCat == FileCategory::VIDEO && !addedVideoHeader) {
+                                rows.push_back({true, "--- VIDÉO ---", 0});
+                                addedVideoHeader = true;
+                            } else if (targetCat == FileCategory::AUDIO && !addedAudioHeader) {
+                                rows.push_back({true, "--- AUDIO (EXTRACTION) ---", 0});
+                                addedAudioHeader = true;
+                            }
+                            rows.push_back({false, FileDetector::toString(m_availableTargets[i]), i});
+                        }
+                    } else {
+                        for (std::size_t i = 0; i < m_availableTargets.size(); ++i) {
+                            rows.push_back({false, FileDetector::toString(m_availableTargets[i]), i});
+                        }
+                    }
+
+                    const float sepHeight = 20.0f;
+                    const float optHeight = (rows.size() > 7) ? 21.5f : 26.0f;
+
+                    float listHeight = 0.0f;
+                    for (const auto& r : rows) {
+                        listHeight += r.isSeparator ? sepHeight : optHeight;
+                    }
+
                     const Rectangle listBounds{dropdownBox.x, dropdownBox.y + dropdownBox.height + 3.0f, dropdownBox.width, listHeight};
 
-                    DrawRectangleRounded({listBounds.x + 2.0f, listBounds.y + 3.0f, listBounds.width, listBounds.height}, 0.12f, 8, Fade(BLACK, 0.12f));
+                    DrawRectangleRounded({listBounds.x + 2.0f, listBounds.y + 3.0f, listBounds.width, listBounds.height}, 0.08f, 8, Fade(BLACK, 0.12f));
                     DrawRectangleRec(listBounds, RAYWHITE);
 
-                    for (std::size_t i = 0; i < m_availableTargets.size(); ++i) {
-                        const Rectangle itemRec{
-                            listBounds.x,
-                            listBounds.y + static_cast<float>(i) * itemHeight,
-                            listBounds.width,
-                            itemHeight
-                        };
-                        const bool itemHovered = CheckCollisionPointRec(mousePos, itemRec);
-                        if (itemHovered) {
-                            DrawRectangleRec(itemRec, {219, 234, 254, 255});
-                        } else if (i == m_selectedTargetIndex) {
+                    float curY = listBounds.y;
+                    for (const auto& row : rows) {
+                        const float h = row.isSeparator ? sepHeight : optHeight;
+                        const Rectangle itemRec{listBounds.x, curY, listBounds.width, h};
+
+                        if (row.isSeparator) {
                             DrawRectangleRec(itemRec, {241, 245, 249, 255});
+                            const float sepFontSize = 13.0f;
+                            const Vector2 sepSize = MeasureTextEx(m_font, row.label.c_str(), sepFontSize, TEXT_SPACING);
+                            DrawTextEx(
+                                m_font,
+                                row.label.c_str(),
+                                {itemRec.x + (itemRec.width - sepSize.x) / 2.0f, itemRec.y + (h - sepSize.y) / 2.0f},
+                                sepFontSize,
+                                TEXT_SPACING,
+                                DARKGRAY
+                            );
+
+                            if (CheckCollisionPointRec(mousePos, itemRec) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                                clickedInsideDropdown = true;
+                            }
+                        } else {
+                            const bool itemHovered = CheckCollisionPointRec(mousePos, itemRec);
+                            if (itemHovered) {
+                                DrawRectangleRec(itemRec, {219, 234, 254, 255});
+                            } else if (row.targetIndex == m_selectedTargetIndex) {
+                                DrawRectangleRec(itemRec, {248, 250, 252, 255});
+                            }
+
+                            const Vector2 optSize = MeasureTextEx(m_font, row.label.c_str(), itemFontSize, TEXT_SPACING);
+                            const Color optColor = (row.targetIndex == m_selectedTargetIndex)
+                                ? Color{29, 78, 216, 255}
+                                : Color{30, 41, 59, 255};
+
+                            DrawTextEx(
+                                m_font,
+                                row.label.c_str(),
+                                {itemRec.x + 16.0f, itemRec.y + (h - optSize.y) / 2.0f},
+                                itemFontSize,
+                                TEXT_SPACING,
+                                optColor
+                            );
+
+                            if (itemHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                                m_selectedTargetIndex = row.targetIndex;
+                                m_dropdownOpen = false;
+                                clickedInsideDropdown = true;
+                            }
                         }
-
-                        const std::string optText = FileDetector::toString(m_availableTargets[i]);
-                        const Vector2 optSize = MeasureTextEx(m_font, optText.c_str(), itemFontSize, TEXT_SPACING);
-                        const Color optColor = (i == m_selectedTargetIndex)
-                            ? Color{29, 78, 216, 255}
-                            : Color{30, 41, 59, 255};
-
-                        DrawTextEx(
-                            m_font,
-                            optText.c_str(),
-                            {itemRec.x + 16.0f, itemRec.y + (itemHeight - optSize.y) / 2.0f},
-                            itemFontSize,
-                            TEXT_SPACING,
-                            optColor
-                        );
-
-                        if (itemHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                            m_selectedTargetIndex = i;
-                            m_dropdownOpen = false;
-                            clickedInsideDropdown = true;
-                        }
+                        curY += h;
                     }
 
                     DrawRectangleLinesEx(listBounds, 1.5f, {148, 163, 184, 255});
@@ -554,15 +639,44 @@ void App::render() {
         }
 
         case AppState::CONVERTING: {
-            const float time = static_cast<float>(GetTime());
-            const float startAngle = time * 360.0f;
-            DrawRing({static_cast<float>(WINDOW_WIDTH) / 2.0f, 155.0f}, 18.0f, 24.0f, startAngle, startAngle + 270.0f, 32, {37, 99, 235, 255});
+            if (m_detectedCategory == FileCategory::VIDEO) {
+                const float progress = std::clamp(m_converter.getProgress(), 0.0f, 100.0f);
+                const int pctInt = static_cast<int>(std::round(progress));
+                const std::string titleText = "Conversion vidéo... " + std::to_string(pctInt) + "%";
 
-            drawCenteredText("Conversion en cours...", 205.0f, 22.0f, {30, 41, 59, 255});
-            const std::string engineSub = (m_detectedCategory == FileCategory::AUDIO || m_detectedCategory == FileCategory::VIDEO)
-                ? "Traitement asynchrone via FFmpeg"
-                : "Traitement asynchrone via ImageMagick";
-            drawCenteredText(engineSub, 238.0f, 16.0f, {100, 116, 139, 255});
+                drawCenteredText(titleText, 140.0f, 22.0f, {30, 41, 59, 255});
+
+                // Barre de progression centrée
+                const Rectangle barBg{120.0f, 182.0f, 360.0f, 26.0f};
+                DrawRectangleRounded(barBg, 0.35f, 8, {226, 232, 240, 255});
+
+                if (progress > 0.5f) {
+                    const float fillW = std::max(14.0f, (barBg.width - 4.0f) * (progress / 100.0f));
+                    const Rectangle barFill{barBg.x + 2.0f, barBg.y + 2.0f, fillW, barBg.height - 4.0f};
+                    DrawRectangleRounded(barFill, 0.35f, 8, {37, 99, 235, 255});
+                } else {
+                    // Fallback animé tant que les premières trames sont en cours d'analyse
+                    const float t = static_cast<float>(GetTime());
+                    const float pulseW = 80.0f;
+                    const float maxOffset = barBg.width - pulseW - 4.0f;
+                    const float offset = (std::sin(t * 3.5f) * 0.5f + 0.5f) * maxOffset;
+                    const Rectangle barPulse{barBg.x + 2.0f + offset, barBg.y + 2.0f, pulseW, barBg.height - 4.0f};
+                    DrawRectangleRounded(barPulse, 0.35f, 8, {59, 130, 246, 255});
+                }
+
+                DrawRectangleRoundedLinesEx(barBg, 0.35f, 8, 1.5f, {148, 163, 184, 255});
+                drawCenteredText("Encodage en arrière-plan via FFmpeg", 224.0f, 16.0f, {100, 116, 139, 255});
+            } else {
+                const float time = static_cast<float>(GetTime());
+                const float startAngle = time * 360.0f;
+                DrawRing({static_cast<float>(WINDOW_WIDTH) / 2.0f, 155.0f}, 18.0f, 24.0f, startAngle, startAngle + 270.0f, 32, {37, 99, 235, 255});
+
+                drawCenteredText("Conversion en cours...", 205.0f, 22.0f, {30, 41, 59, 255});
+                const std::string engineSub = (m_detectedCategory == FileCategory::AUDIO)
+                    ? "Traitement asynchrone via FFmpeg"
+                    : "Traitement asynchrone via ImageMagick";
+                drawCenteredText(engineSub, 238.0f, 16.0f, {100, 116, 139, 255});
+            }
             break;
         }
 
@@ -574,30 +688,88 @@ void App::render() {
                 const std::filesystem::path absPath = std::filesystem::weakly_canonical(outPath, ec);
                 const std::string rawPathStr = ec ? outPath.string() : absPath.string();
 
-                drawCenteredText("Conversion réussie !", 85.0f, 22.0f, {22, 163, 74, 255});
-                drawCenteredText("Fichier généré :", 122.0f, 16.0f, {100, 116, 139, 255});
+                std::string successHeadline = "Succès ! Fichier créé";
+                if (!m_outputSizeFormatted.empty()) {
+                    successHeadline += " (" + m_outputSizeFormatted + ")";
+                }
+                drawCenteredText(successHeadline, 78.0f, 22.0f, {22, 163, 74, 255});
+                drawCenteredText("Chemin du fichier généré :", 114.0f, 15.0f, {100, 116, 139, 255});
 
-                const Rectangle pathBox{64.0f, 150.0f, static_cast<float>(WINDOW_WIDTH - 128), 38.0f};
+                // Zone conteneur du chemin avec police réduite et défilement horizontal (Scissor Mode)
+                const Rectangle pathBox{60.0f, 140.0f, 480.0f, 38.0f};
                 DrawRectangleRounded(pathBox, 0.2f, 8, {241, 245, 249, 255});
-                DrawRectangleRoundedLinesEx(pathBox, 0.2f, 8, 1.0f, {203, 213, 225, 255});
+                DrawRectangleRoundedLinesEx(pathBox, 0.2f, 8, 1.2f, {203, 213, 225, 255});
 
-                const float pathFontSize = 16.0f;
-                const std::string fittedPath = fitTextToWidth(rawPathStr, pathFontSize, pathBox.width - 24.0f, true);
-                const Vector2 fittedSize = MeasureTextEx(m_font, fittedPath.c_str(), pathFontSize, TEXT_SPACING);
-                DrawTextEx(
-                    m_font,
-                    fittedPath.c_str(),
-                    {pathBox.x + (pathBox.width - fittedSize.x) / 2.0f, pathBox.y + (pathBox.height - fittedSize.y) / 2.0f},
-                    pathFontSize,
-                    TEXT_SPACING,
-                    {30, 41, 59, 255}
-                );
+                const float pathFontSize = 15.0f;
+                const Vector2 fullTextSize = MeasureTextEx(m_font, rawPathStr.c_str(), pathFontSize, TEXT_SPACING);
+                const float innerPadding = 22.0f;
+                const float visibleWidth = pathBox.width - innerPadding * 2.0f;
+                const float textY = pathBox.y + (pathBox.height - fullTextSize.y) / 2.0f;
+
+                if (fullTextSize.x <= visibleWidth) {
+                    DrawTextEx(
+                        m_font,
+                        rawPathStr.c_str(),
+                        {pathBox.x + (pathBox.width - fullTextSize.x) / 2.0f, textY},
+                        pathFontSize,
+                        TEXT_SPACING,
+                        {30, 41, 59, 255}
+                    );
+                } else {
+                    const float maxScroll = fullTextSize.x - visibleWidth;
+                    const Vector2 mousePos = GetMousePosition();
+                    if (CheckCollisionPointRec(mousePos, pathBox)) {
+                        const float wheel = GetMouseWheelMove();
+                        if (wheel != 0.0f) {
+                            m_pathScrollOffset -= wheel * 36.0f;
+                        }
+                    }
+                    if (IsKeyDown(KEY_RIGHT)) {
+                        m_pathScrollOffset += 4.0f;
+                    }
+                    if (IsKeyDown(KEY_LEFT)) {
+                        m_pathScrollOffset -= 4.0f;
+                    }
+                    m_pathScrollOffset = std::clamp(m_pathScrollOffset, 0.0f, maxScroll);
+
+                    // Indicateurs latéraux discrets < et >
+                    if (m_pathScrollOffset > 1.0f) {
+                        DrawTextEx(m_font, "<", {pathBox.x + 6.0f, textY}, 14.0f, TEXT_SPACING, {100, 116, 139, 255});
+                    }
+                    if (m_pathScrollOffset < maxScroll - 1.0f) {
+                        DrawTextEx(m_font, ">", {pathBox.x + pathBox.width - 14.0f, textY}, 14.0f, TEXT_SPACING, {100, 116, 139, 255});
+                    }
+
+                    BeginScissorMode(
+                        static_cast<int>(pathBox.x + innerPadding),
+                        static_cast<int>(pathBox.y),
+                        static_cast<int>(visibleWidth),
+                        static_cast<int>(pathBox.height)
+                    );
+                    DrawTextEx(
+                        m_font,
+                        rawPathStr.c_str(),
+                        {pathBox.x + innerPadding - m_pathScrollOffset, textY},
+                        pathFontSize,
+                        TEXT_SPACING,
+                        {30, 41, 59, 255}
+                    );
+                    EndScissorMode();
+
+                    // Barre de défilement horizontale miniature sous le conteneur
+                    const Rectangle trackRec{pathBox.x + innerPadding, pathBox.y + pathBox.height + 4.0f, visibleWidth, 4.0f};
+                    DrawRectangleRounded(trackRec, 0.5f, 4, {226, 232, 240, 255});
+                    const float thumbRatio = visibleWidth / fullTextSize.x;
+                    const float thumbW = std::max(30.0f, trackRec.width * thumbRatio);
+                    const float thumbX = trackRec.x + (trackRec.width - thumbW) * (m_pathScrollOffset / maxScroll);
+                    DrawRectangleRounded({thumbX, trackRec.y, thumbW, trackRec.height}, 0.5f, 4, {148, 163, 184, 255});
+                }
             } else if (status == ConversionStatus::MISSING_TOOL) {
                 drawCenteredText("Outil CLI manquant", 115.0f, 22.0f, {220, 38, 38, 255});
                 const std::string missingMsg = (m_detectedCategory == FileCategory::AUDIO || m_detectedCategory == FileCategory::VIDEO)
-                    ? "Veuillez installer FFmpeg ('ffmpeg') dans le PATH."
-                    : "Veuillez installer ImageMagick ('magick') dans le PATH.";
-                drawCenteredText(missingMsg, 152.0f, 16.0f, {100, 116, 139, 255});
+                    ? "Veuillez installer FFmpeg ('ffmpeg') ou le placer dans bin/ffmpeg/."
+                    : "Veuillez installer ImageMagick ('magick') ou le placer dans bin/imagemagick/.";
+                drawCenteredText(missingMsg, 152.0f, 15.0f, {100, 116, 139, 255});
             } else {
                 drawCenteredText("Erreur lors de la conversion", 115.0f, 22.0f, {220, 38, 38, 255});
                 drawCenteredText("La commande CLI externe a échoué.", 152.0f, 16.0f, {100, 116, 139, 255});
@@ -622,5 +794,7 @@ void App::resetState() {
     m_availableTargets.clear();
     m_selectedTargetIndex = 0;
     m_dropdownOpen = false;
+    m_pathScrollOffset = 0.0f;
+    m_outputSizeFormatted.clear();
     m_state = AppState::WAITING_DROP;
 }

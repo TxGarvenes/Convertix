@@ -33,15 +33,15 @@ std::vector<FileType> FormatMatrix::getAvailableTargets(FileType sourceType) {
         case FileType::SVG:
             return {FileType::PNG, FileType::JPEG, FileType::WEBP, FileType::TIFF, FileType::PDF};
 
-        // Image animée GIF -> WEBP, MP4, PNG
+        // Image animée GIF -> WEBP, PNG (cloisonnement strict : jamais de cible vidéo depuis une image)
         case FileType::GIF:
-            return {FileType::WEBP, FileType::MP4, FileType::PNG};
+            return {FileType::WEBP, FileType::PNG};
 
         // Icône ICO -> PNG, JPEG, WEBP, BMP
         case FileType::ICO:
             return {FileType::PNG, FileType::JPEG, FileType::WEBP, FileType::BMP};
 
-        // Audio -> MP3, WAV, FLAC, OGG, AAC (moins le format source)
+        // Audio -> MP3, WAV, FLAC, OGG, AAC (moins le format source, jamais de cible vidéo)
         case FileType::MP3:
         case FileType::WAV:
         case FileType::FLAC:
@@ -50,6 +50,20 @@ std::vector<FileType> FormatMatrix::getAvailableTargets(FileType sourceType) {
         case FileType::M4A:
             return filterOutSource(
                 {FileType::MP3, FileType::WAV, FileType::FLAC, FileType::OGG, FileType::AAC},
+                sourceType
+            );
+
+        // Vidéo -> Vidéo (MP4, MKV, AVI, WEBM moins le format source) + Extraction Audio (MP3, WAV, OGG, FLAC)
+        case FileType::MP4:
+        case FileType::MKV:
+        case FileType::AVI:
+        case FileType::MOV:
+        case FileType::WEBM:
+            return filterOutSource(
+                {
+                    FileType::MP4, FileType::MKV, FileType::AVI, FileType::WEBM,
+                    FileType::MP3, FileType::WAV, FileType::OGG, FileType::FLAC
+                },
                 sourceType
             );
 

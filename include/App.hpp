@@ -38,6 +38,9 @@ private:
     std::size_t m_selectedTargetIndex{0};
     bool m_dropdownOpen{false};
 
+    float m_pathScrollOffset{0.0f};
+    std::string m_outputSizeFormatted;
+
     Converter m_converter;
 
     std::future<std::optional<std::filesystem::path>> m_fileDialogTask;
@@ -65,4 +68,5 @@ private:
     void drawCenteredText(const std::string& text, float y, float fontSize, Color color) const;
     bool drawButton(Rectangle bounds, const std::string& label, Color baseColor, Color hoverColor, Color textColor, bool enabled = true) const;
     std::string fitTextToWidth(const std::string& text, float fontSize, float maxWidth, bool keepEnd = false) const;
+    static std::string formatFileSize(const std::filesystem::path& filePath);
 };

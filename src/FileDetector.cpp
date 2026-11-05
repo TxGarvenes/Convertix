@@ -50,6 +50,9 @@ FileType FileDetector::detect(const std::filesystem::path& filePath) {
     }
 
     const std::string ext = getLowerExtension(filePath);
+    const std::string headerAscii = toLowerAscii(
+        std::string(reinterpret_cast<const char*>(bytes.data()), static_cast<std::size_t>(bytesRead))
+    );
 
     // 1. PNG: 89 50 4E 47 0D 0A 1A 0A (8 bytes)
     if (bytesRead >= 8 &&
@@ -81,7 +84,22 @@ FileType FileDetector::detect(const std::filesystem::path& filePath) {
         }
     }
 
-    // 4. Conteneurs ISO Base Media ("ftyp" à 4..7): HEIC, M4A, MP4, MOV
+    // 4. Conteneur EBML (MKV / WEBM): 1A 45 DF A3 à 0..3
+    if (bytesRead >= 4 &&
+        bytes[0] == 0x1A && bytes[1] == 0x45 && bytes[2] == 0xDF && bytes[3] == 0xA3) {
+        if (headerAscii.find("webm") != std::string::npos) {
+            return FileType::WEBM;
+        }
+        if (headerAscii.find("matroska") != std::string::npos) {
+            return FileType::MKV;
+        }
+        if (ext == ".webm") {
+            return FileType::WEBM;
+        }
+        return FileType::MKV;
+    }
+
+    // 5. Conteneurs ISO Base Media ("ftyp" à 4..7): HEIC, M4A, MP4, MOV
     if (bytesRead >= 12 &&
         bytes[4] == 'f' && bytes[5] == 't' && bytes[6] == 'y' && bytes[7] == 'p') {
         const std::string brand(reinterpret_cast<const char*>(&bytes[8]), 4);
@@ -95,54 +113,65 @@ FileType FileDetector::detect(const std::filesystem::path& filePath) {
         if (brand == "qt  ") {
             return FileType::MOV;
         }
-        if (brand == "isom" || brand == "iso2" || brand == "mp41" || brand == "mp42" ||
-            brand == "avc1" || brand == "dash") {
-            if (ext == ".m4a") {
-                return FileType::M4A;
+        if (ext == ".mov") {
+            return FileType::MOV;
+        }
+        if (ext == ".m4a") {
+            return FileType::M4A;
+        }
+        return FileType::MP4;
+    }
+
+    // Atomes QuickTime sans "ftyp" (moov, wide, free, mdat aux octets 4..7)
+    if (bytesRead >= 8) {
+        const std::string atom(reinterpret_cast<const char*>(&bytes[4]), 4);
+        if (atom == "moov" || atom == "wide" || atom == "free" || atom == "mdat") {
+            if (ext == ".mp4") {
+                return FileType::MP4;
             }
-            return FileType::MP4;
+            return FileType::MOV;
         }
     }
 
-    // 5. FLAC: 66 4C 61 43 ("fLaC")
+    // 6. FLAC: 66 4C 61 43 ("fLaC")
     if (bytesRead >= 4 &&
         bytes[0] == 0x66 && bytes[1] == 0x4C && bytes[2] == 0x61 && bytes[3] == 0x43) {
         return FileType::FLAC;
     }
 
-    // 6. OGG: 4F 67 67 53 ("OggS")
+    // 7. OGG: 4F 67 67 53 ("OggS")
     if (bytesRead >= 4 &&
         bytes[0] == 0x4F && bytes[1] == 0x67 && bytes[2] == 0x67 && bytes[3] == 0x53) {
         return FileType::OGG;
     }
 
-    // 7. MP3: ID3v2 ("ID3" = 49 44 33)
+    // 8. MP3: ID3v2 ("ID3" = 49 44 33)
     if (bytesRead >= 3 &&
         bytes[0] == 0x49 && bytes[1] == 0x44 && bytes[2] == 0x33) {
         return FileType::MP3;
     }
 
-    // 8. AAC (ADTS: FF F1 ou FF F9)
+    // 9. AAC (ADTS: FF F1 ou FF F9)
     if (bytesRead >= 2 &&
         bytes[0] == 0xFF && (bytes[1] == 0xF1 || bytes[1] == 0xF9)) {
         return FileType::AAC;
     }
 
-    // 9. MP3 sans tag ID3 (Frame sync MPEG Audio: FF FB, FF F3, FF F2, FF FA, FF E3)
+    // 10. MP3 sans tag ID3 (Frame sync MPEG Audio: FF FB, FF F3, FF F2, FF FA, FF E3)
     if (bytesRead >= 2 &&
         bytes[0] == 0xFF &&
         (bytes[1] == 0xFB || bytes[1] == 0xF3 || bytes[1] == 0xF2 || bytes[1] == 0xFA || bytes[1] == 0xE3)) {
         return FileType::MP3;
     }
 
-    // 10. GIF: 47 49 46 38 37 61 (GIF87a) ou 47 49 46 38 39 61 (GIF89a)
+    // 11. GIF: 47 49 46 38 37 61 (GIF87a) ou 47 49 46 38 39 61 (GIF89a)
     if (bytesRead >= 6 &&
         bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38 &&
         (bytes[4] == 0x37 || bytes[4] == 0x39) && bytes[5] == 0x61) {
         return FileType::GIF;
     }
 
-    // 11. TIFF / DNG / RAW: 49 49 2A 00 (Little-Endian) ou 4D 4D 00 2A (Big-Endian)
+    // 12. TIFF / DNG / RAW: 49 49 2A 00 (Little-Endian) ou 4D 4D 00 2A (Big-Endian)
     if (bytesRead >= 4 &&
         ((bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x2A && bytes[3] == 0x00) ||
          (bytes[0] == 0x4D && bytes[1] == 0x4D && bytes[2] == 0x00 && bytes[3] == 0x2A))) {
@@ -152,37 +181,47 @@ FileType FileDetector::detect(const std::filesystem::path& filePath) {
         return FileType::TIFF;
     }
 
-    // 12. ICO: 00 00 01 00
+    // 13. ICO: 00 00 01 00
     if (bytesRead >= 4 &&
         bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0x01 && bytes[3] == 0x00) {
         return FileType::ICO;
     }
 
-    // 13. PDF: 25 50 44 46 ("%PDF")
+    // 14. PDF: 25 50 44 46 ("%PDF")
     if (bytesRead >= 4 &&
         bytes[0] == 0x25 && bytes[1] == 0x50 && bytes[2] == 0x44 && bytes[3] == 0x46) {
         return FileType::PDF;
     }
 
-    // 14. BMP: 42 4D ("BM")
+    // 15. BMP: 42 4D ("BM")
     if (bytesRead >= 2 &&
         bytes[0] == 0x42 && bytes[1] == 0x4D) {
         return FileType::BMP;
     }
 
-    // 15. SVG (recherche de "<svg" dans les 512 premiers octets)
-    {
-        const std::string headerText = toLowerAscii(
-            std::string(reinterpret_cast<const char*>(bytes.data()), static_cast<std::size_t>(bytesRead))
-        );
-        if (headerText.find("<svg") != std::string::npos) {
-            return FileType::SVG;
-        }
+    // 16. SVG (recherche de "<svg" dans les 512 premiers octets)
+    if (headerAscii.find("<svg") != std::string::npos) {
+        return FileType::SVG;
     }
 
-    // 16. Fallback par extension pour les RAW spécifiques
+    // 17. Fallback par extension pour RAW et conteneurs vidéo à métadonnées variables
     if (isRawExtension(ext)) {
         return FileType::RAW;
+    }
+    if (ext == ".mp4") {
+        return FileType::MP4;
+    }
+    if (ext == ".mkv") {
+        return FileType::MKV;
+    }
+    if (ext == ".avi") {
+        return FileType::AVI;
+    }
+    if (ext == ".mov") {
+        return FileType::MOV;
+    }
+    if (ext == ".webm") {
+        return FileType::WEBM;
     }
 
     return FileType::UNKNOWN;
@@ -234,16 +273,16 @@ FileCategory FileDetector::getCategory(FileType type) {
 std::string FileDetector::categoryToString(FileCategory category) {
     switch (category) {
         case FileCategory::IMAGE:
-            return "IMAGE";
+            return "Image";
         case FileCategory::AUDIO:
-            return "AUDIO";
+            return "Audio";
         case FileCategory::VIDEO:
-            return "VIDEO";
+            return "Vidéo";
         case FileCategory::DOCUMENT:
-            return "DOCUMENT";
+            return "Document";
         case FileCategory::UNKNOWN:
         default:
-            return "INCONNU";
+            return "Inconnu";
     }
 }
 
