@@ -1,4 +1,5 @@
 #include "App.hpp"
+#include "EmbeddedAssets.hpp"
 #include "FormatMatrix.hpp"
 
 #include <algorithm>
@@ -80,13 +81,9 @@ Image loadSvgImage(const std::filesystem::path& svgPath, int targetWidth, int ta
     const std::filesystem::path cachePng = svgPath.parent_path() / cacheFileName;
 
     if (std::filesystem::exists(cachePng, ec)) {
-        const auto svgTime = std::filesystem::last_write_time(svgPath, ec);
-        const auto cacheTime = std::filesystem::last_write_time(cachePng, ec);
-        if (!ec && cacheTime >= svgTime) {
-            Image cachedImg = LoadImage(cachePng.string().c_str());
-            if (IsImageValid(cachedImg)) {
-                return cachedImg;
-            }
+        Image cachedImg = LoadImage(cachePng.string().c_str());
+        if (IsImageValid(cachedImg)) {
+            return cachedImg;
         }
     }
 
@@ -98,18 +95,10 @@ Image loadSvgImage(const std::filesystem::path& svgPath, int targetWidth, int ta
     }
 
     const std::string magickCmd = Converter::resolveToolPath("magick");
-#ifdef _WIN32
-    std::string cmd = magickCmd + " -background none \"" + svgPath.string() + "\"" +
-                      resizeArg + " PNG32:\"" + cachePng.string() + "\" > NUL 2>&1";
-    if (!cmd.empty() && cmd.front() == '"') {
-        cmd = "\"" + cmd + "\"";
-    }
-#else
     const std::string cmd = magickCmd + " -background none \"" + svgPath.string() + "\"" +
                             resizeArg + " PNG32:\"" + cachePng.string() + "\" > /dev/null 2>&1";
-#endif
 
-    if (std::system(cmd.c_str()) == 0 && std::filesystem::exists(cachePng, ec)) {
+    if (Converter::executeCommandSilent(cmd) == 0 && std::filesystem::exists(cachePng, ec)) {
         return LoadImage(cachePng.string().c_str());
     }
 
@@ -134,26 +123,16 @@ void detectImageDimensions(const std::filesystem::path& filePath, int& outWidth,
 
     // 2. Fallback d'inspection d'en-tête (-ping) via ImageMagick pour WEBP/TIFF/HEIC/ICO (sélectionne la plus haute résolution)
     const std::string magickCmd = Converter::resolveToolPath("magick");
-    std::string cmd = magickCmd + " identify -ping -format \"%w %h\\n\" \"" + filePath.string() + "\" 2>/dev/null";
-#ifdef _WIN32
-    cmd = magickCmd + " identify -ping -format \"%w %h\\n\" \"" + filePath.string() + "\" 2>NUL";
-    if (!cmd.empty() && cmd.front() == '"') {
-        cmd = "\"" + cmd + "\"";
-    }
-    FILE* pipe = _popen(cmd.c_str(), "r");
-#else
-    FILE* pipe = popen(cmd.c_str(), "r");
-#endif
-    if (!pipe) {
-        return;
-    }
+    const std::string cmd = magickCmd + " identify -ping -format \"%w %h\\n\" \"" + filePath.string() + "\" 2>&1";
+    const std::string output = Converter::executeCommandCapture(cmd);
 
-    std::array<char, 128> buffer{};
+    std::istringstream iss(output);
+    std::string line;
     long long bestArea = -1;
-    while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+    while (std::getline(iss, line)) {
         int w = 0;
         int h = 0;
-        if (std::sscanf(buffer.data(), "%d %d", &w, &h) == 2 && w > 0 && h > 0) {
+        if (std::sscanf(line.c_str(), "%d %d", &w, &h) == 2 && w > 0 && h > 0) {
             const long long area = static_cast<long long>(w) * static_cast<long long>(h);
             if (area >= bestArea) {
                 bestArea = area;
@@ -162,65 +141,10 @@ void detectImageDimensions(const std::filesystem::path& filePath, int& outWidth,
             }
         }
     }
-#ifdef _WIN32
-    _pclose(pipe);
-#else
-    pclose(pipe);
-#endif
 }
 
 std::optional<std::filesystem::path> openNativeFileDialog() {
-#ifdef _WIN32
-    const char* cmd =
-        "powershell -NoProfile -Command \""
-        "Add-Type -AssemblyName System.Windows.Forms; "
-        "$f = New-Object System.Windows.Forms.OpenFileDialog; "
-        "$f.Title = 'Selectionner un fichier'; "
-        "$f.Filter = 'Tous les fichiers supportes|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.heic;*.tiff;*.tif;*.ico;*.svg;*.dng;*.cr2;*.nef;*.arw;*.mp3;*.wav;*.flac;*.ogg;*.aac;*.m4a;*.mp4;*.mkv;*.avi;*.mov;*.webm;*.docx;*.odt;*.md;*.html;*.htm;*.txt|Tous les fichiers (*.*)|*.*'; "
-        "if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }\"";
-    FILE* pipe = _popen(cmd, "r");
-#else
-    const char* cmd =
-        "if command -v zenity >/dev/null 2>&1; then "
-        "zenity --file-selection --title=\"Sélectionner un fichier\" "
-        "--file-filter=\"Fichiers supportés (Image, Audio, Vidéo, Document) | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.heif *.HEIF *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.svg *.SVG *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.ogg *.OGG *.aac *.AAC *.m4a *.M4A *.mp4 *.MP4 *.mkv *.MKV *.avi *.AVI *.mov *.MOV *.webm *.WEBM *.docx *.DOCX *.odt *.ODT *.md *.MD *.html *.HTML *.htm *.HTM *.txt *.TXT\" "
-        "--file-filter=\"Images | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.bmp *.BMP *.gif *.GIF *.heic *.HEIC *.tiff *.TIFF *.tif *.TIF *.ico *.ICO *.svg *.SVG *.dng *.DNG *.cr2 *.CR2 *.nef *.NEF *.arw *.ARW\" "
-        "--file-filter=\"Audio | *.mp3 *.MP3 *.wav *.WAV *.flac *.FLAC *.ogg *.OGG *.aac *.AAC *.m4a *.M4A\" "
-        "--file-filter=\"Vidéo | *.mp4 *.MP4 *.mkv *.MKV *.avi *.AVI *.mov *.MOV *.webm *.WEBM\" "
-        "--file-filter=\"Documents | *.docx *.DOCX *.odt *.ODT *.md *.MD *.html *.HTML *.htm *.HTM *.txt *.TXT\" "
-        "--file-filter=\"Tous les fichiers | *\" 2>/dev/null; "
-        "elif command -v kdialog >/dev/null 2>&1; then "
-        "kdialog --getopenfilename . \"*.png *.jpg *.jpeg *.webp *.bmp *.gif *.heic *.tiff *.tif *.ico *.svg *.dng *.cr2 *.nef *.arw *.mp3 *.wav *.flac *.ogg *.aac *.m4a *.mp4 *.mkv *.avi *.mov *.webm *.docx *.odt *.md *.html *.htm *.txt|Fichiers supportés\" 2>/dev/null; "
-        "elif command -v yad >/dev/null 2>&1; then "
-        "yad --file --title=\"Sélectionner un fichier\" 2>/dev/null; "
-        "fi";
-    FILE* pipe = popen(cmd, "r");
-#endif
-    if (!pipe) {
-        return std::nullopt;
-    }
-
-    std::string output;
-    std::array<char, 512> buffer{};
-    while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
-        output += buffer.data();
-    }
-
-#ifdef _WIN32
-    _pclose(pipe);
-#else
-    pclose(pipe);
-#endif
-
-    while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) {
-        output.pop_back();
-    }
-
-    if (output.empty()) {
-        return std::nullopt;
-    }
-
-    return std::filesystem::path(output);
+    return Converter::openNativeFilePicker();
 }
 
 } // namespace
@@ -242,6 +166,31 @@ const std::filesystem::path& App::getBasePath() {
 }
 
 void App::loadAppFont() {
+    std::vector<int> codepoints;
+    codepoints.reserve(224);
+    for (int cp = 32; cp <= 255; ++cp) {
+        codepoints.push_back(cp);
+    }
+
+    // 1. Chargement direct depuis la police TTF embarquée dans le binaire
+    if (EmbeddedAssets::FONT_TTF_SIZE > 0) {
+        m_font = LoadFontFromMemory(
+            ".ttf",
+            EmbeddedAssets::FONT_TTF,
+            static_cast<int>(EmbeddedAssets::FONT_TTF_SIZE),
+            BASE_FONT_SIZE,
+            codepoints.data(),
+            static_cast<int>(codepoints.size())
+        );
+
+        if (IsFontValid(m_font) && m_font.texture.id != 0 && m_font.texture.id != GetFontDefault().texture.id) {
+            SetTextureFilter(m_font.texture, TEXTURE_FILTER_BILINEAR);
+            m_customFontLoaded = true;
+            return;
+        }
+    }
+
+    // 2. Fallback sur le dossier assets/ sur disque
     const std::filesystem::path& basePath = App::getBasePath();
     const std::array<std::filesystem::path, 4> searchDirs = {
         basePath / "assets" / "fonts",
@@ -259,12 +208,6 @@ void App::loadAppFont() {
     }
 
     if (fontPath.has_value()) {
-        std::vector<int> codepoints;
-        codepoints.reserve(224);
-        for (int cp = 32; cp <= 255; ++cp) {
-            codepoints.push_back(cp);
-        }
-
         m_font = LoadFontEx(
             fontPath->string().c_str(),
             BASE_FONT_SIZE,
@@ -291,12 +234,22 @@ void App::unloadAppFont() {
 }
 
 void App::loadAppIcon() {
-    const auto iconPath = findAssetFile("icon.svg");
-    if (!iconPath.has_value()) {
-        return;
+    Image iconImage{};
+    if (EmbeddedAssets::ICON_PNG_SIZE > 0) {
+        iconImage = LoadImageFromMemory(
+            ".png",
+            EmbeddedAssets::ICON_PNG,
+            static_cast<int>(EmbeddedAssets::ICON_PNG_SIZE)
+        );
     }
 
-    Image iconImage = loadSvgImage(*iconPath, 64, 64);
+    if (!IsImageValid(iconImage)) {
+        const auto iconPath = findAssetFile("icon.svg");
+        if (iconPath.has_value()) {
+            iconImage = loadSvgImage(*iconPath, 64, 64);
+        }
+    }
+
     if (IsImageValid(iconImage)) {
         ImageFormat(&iconImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
         SetWindowIcon(iconImage);
@@ -305,12 +258,22 @@ void App::loadAppIcon() {
 }
 
 void App::loadAppLogo() {
-    const auto logoPath = findAssetFile("logo.svg");
-    if (!logoPath.has_value()) {
-        return;
+    Image logoImage{};
+    if (EmbeddedAssets::LOGO_PNG_SIZE > 0) {
+        logoImage = LoadImageFromMemory(
+            ".png",
+            EmbeddedAssets::LOGO_PNG,
+            static_cast<int>(EmbeddedAssets::LOGO_PNG_SIZE)
+        );
     }
 
-    Image logoImage = loadSvgImage(*logoPath, 0, 12);
+    if (!IsImageValid(logoImage)) {
+        const auto logoPath = findAssetFile("logo.svg");
+        if (logoPath.has_value()) {
+            logoImage = loadSvgImage(*logoPath, 0, 12);
+        }
+    }
+
     if (IsImageValid(logoImage)) {
         m_logoTexture = LoadTextureFromImage(logoImage);
         UnloadImage(logoImage);
@@ -410,7 +373,7 @@ void App::openOutputFolderAsync(const std::filesystem::path& outputPath) {
 #endif
 
     std::thread([cmd]() {
-        std::system(cmd.c_str());
+        Converter::executeCommandSilent(cmd);
     }).detach();
 }
 

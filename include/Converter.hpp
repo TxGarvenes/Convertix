@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <future>
 #include <mutex>
+#include <optional>
 #include <string>
 
 enum class ConversionStatus {
@@ -27,6 +28,9 @@ public:
     static void initBasePath(const char* argv0 = nullptr);
     static const std::filesystem::path& getBasePath();
     static std::string resolveToolPath(const std::string& toolName);
+    static int executeCommandSilent(const std::string& command);
+    static std::string executeCommandCapture(const std::string& command);
+    static std::optional<std::filesystem::path> openNativeFilePicker();
 
     bool checkToolsAvailability();
     bool isMagickAvailable() const;

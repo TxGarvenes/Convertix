@@ -14,6 +14,7 @@ endif()
 find_package(Threads REQUIRED)
 
 if(WIN32)
+    enable_language(RC)
     include(FetchContent)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -47,13 +48,20 @@ else()
     endif()
 endif()
 
-add_executable(convertix
+set(CONVERTIX_SOURCES
     src/main.cpp
     src/FileDetector.cpp
     src/FormatMatrix.cpp
     src/Converter.cpp
     src/App.cpp
+    src/EmbeddedAssets.cpp
 )
+
+if(WIN32)
+    list(APPEND CONVERTIX_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/assets/convertix.rc")
+endif()
+
+add_executable(convertix ${CONVERTIX_SOURCES})
 
 target_include_directories(convertix PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -77,6 +85,7 @@ if(WIN32)
         gdi32
         winmm
         shell32
+        comdlg32
     )
 
     if(MINGW)
@@ -91,14 +100,28 @@ endif()
 
 set_target_properties(convertix PROPERTIES OUTPUT_NAME "Convertix")
 
-add_custom_command(TARGET convertix POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/bin"
-        "$<TARGET_FILE_DIR:convertix>/bin"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets"
-        "$<TARGET_FILE_DIR:convertix>/assets"
-    COMMENT "Copie des dossiers bin/ et assets/ a cote de l'executable..."
-)
+if(WIN32)
+    find_program(PYTHON3_EXECUTABLE NAMES python3 python REQUIRED)
+    add_custom_command(TARGET convertix POST_BUILD
+        COMMAND "${PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/pack_windows_exe.py"
+            "$<TARGET_FILE:convertix>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/bin"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:convertix>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Convertix.exe"
+        COMMENT "Empaquetage des outils CLI Windows dans Convertix.exe (exécutable unique tout-en-un)..."
+    )
+else()
+    add_custom_command(TARGET convertix POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/bin"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/bin"
+            "$<TARGET_FILE_DIR:convertix>/bin"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+            "$<TARGET_FILE_DIR:convertix>/assets"
+        COMMENT "Copie des dossiers bin/ et assets/ a cote de l'executable..."
+    )
+endif()
