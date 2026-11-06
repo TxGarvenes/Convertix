@@ -5,10 +5,11 @@ bin/
 *.o
 *.obj
 *.exe
-
 .vscode/
 .idea/
 AppDir/
 *.AppImage
 appimagetool*
 squashfs-root/
+toolchain-windows.cmake
+build-win/
